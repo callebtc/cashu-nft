@@ -35,6 +35,8 @@ ORANGE: Color = (255, 106, 31)
 PINK: Color = (255, 90, 168)
 YELLOW: Color = (255, 210, 61)
 STONE: Color = (168, 163, 151)
+# Light paper behind avatars: identicon colours (one is near-black) vanish on dark.
+CREAM: Color = (255, 253, 247)
 # Same palette and pick as the web app's Identicon.
 IDENTICON: Sequence[Color] = (
     (31, 111, 235),
@@ -72,7 +74,9 @@ def _font(family: str, subset: str, px: int, weight: int) -> ImageFont.FreeTypeF
 
 def _glyph(family: str, subset: str, ch: str) -> bytes:
     image = Image.new("L", (48, 48))
-    ImageDraw.Draw(image).text((8, 8), ch, font=_font(family, subset, 28, 400), fill=255)
+    ImageDraw.Draw(image).text(
+        (8, 8), ch, font=_font(family, subset, 28, 400), fill=255
+    )
     return image.tobytes()
 
 
@@ -95,11 +99,7 @@ def _runs(text: str, style: Style) -> List[Tuple[ImageFont.FreeTypeFont, str]]:
     runs: List[Tuple[ImageFont.FreeTypeFont, str]] = []
     for ch in text:
         subset = next(
-            (
-                sub
-                for sub in SUBSETS
-                if ch == " " or _has_glyph(style.family, sub, ch)
-            ),
+            (sub for sub in SUBSETS if ch == " " or _has_glyph(style.family, sub, ch)),
             None,
         )
         if subset is None:
@@ -268,7 +268,7 @@ def _tint(image: Optional[Image.Image]) -> Color:
 def _identicon(pubkey: str, size: int) -> Image.Image:
     data = bytes.fromhex(pubkey)
     color = IDENTICON[data[0] % len(IDENTICON)]
-    image = Image.new("RGB", (size, size), SURFACE)
+    image = Image.new("RGB", (size, size), CREAM)
     draw = ImageDraw.Draw(image)
     unit = size / 7
     for y in range(5):
@@ -294,7 +294,7 @@ def _avatar(
     shadow: float,
 ) -> None:
     draw = ImageDraw.Draw(canvas)
-    _box(draw, x, y, size, size, radius, SURFACE, INK, 3, shadow)
+    _box(draw, x, y, size, size, radius, CREAM, INK, 3, shadow)
     inner = size - 6
     picture = _open(jpg, _s(inner)) or _identicon(pubkey, _s(inner))
     _paste_rounded(canvas, picture, x + 3, y + 3, radius - 3)
@@ -405,7 +405,11 @@ def _brand(canvas: Image.Image, host: str) -> None:
     if host:
         url = Style(SANS, 20, 600)
         _text(
-            draw, x + 52 + _width("Cashu NFT", name) + 14, y + 28, host, url,
+            draw,
+            x + 52 + _width("Cashu NFT", name) + 14,
+            y + 28,
+            host,
+            url,
             _mix(INK, PAPER, 0.55),
         )
 
@@ -425,8 +429,12 @@ def _headline(
 def _lead(canvas: Image.Image, text: str, top: float) -> None:
     style = Style(SANS, 25, 500)
     _text(
-        ImageDraw.Draw(canvas), FX + 60, top + 25, _ellipsize(text, style, 560),
-        style, _mix(INK, PAPER, 0.88),
+        ImageDraw.Draw(canvas),
+        FX + 60,
+        top + 25,
+        _ellipsize(text, style, 560),
+        style,
+        _mix(INK, PAPER, 0.88),
     )
 
 
@@ -478,8 +486,14 @@ def collection_image(preview: CollectionPreview, host: str) -> bytes:
         empty = _layer(250, 250)
         _box(ImageDraw.Draw(empty), 0, 0, 240, 240, 20, SURFACE, STONE, 3)
         style = Style(DISPLAY, 26, 800)
-        _text(ImageDraw.Draw(empty), 120 - _width("No NFTs yet", style) / 2, 129,
-              "No NFTs yet", style, STONE)
+        _text(
+            ImageDraw.Draw(empty),
+            120 - _width("No NFTs yet", style) / 2,
+            129,
+            "No NFTs yet",
+            style,
+            STONE,
+        )
         _place(canvas, empty, stage + 235, FY + 290, -4)
     elif len(cards) == 1:
         _place(canvas, _card(cards[0], 320, None, False), stage + 240, FY + 300, -4)
@@ -510,8 +524,13 @@ def link_image(preview: LinkPreview, host: str) -> bytes:
     used = preview.status != "open"
 
     _pill(
-        draw, FX + 60, FY + 56, "Link used" if used else "Transfer link",
-        STONE if used else LIME, 19, 40,
+        draw,
+        FX + 60,
+        FY + 56,
+        "Link used" if used else "Transfer link",
+        STONE if used else LIME,
+        19,
+        40,
     )
     _avatar(canvas, FX + 60, FY + 130, 48, 14, preview.sender, preview.avatar, 3)
     who = Style(SANS, 28, 650)
@@ -531,8 +550,9 @@ def link_image(preview: LinkPreview, host: str) -> bytes:
     card = _card(preview.card, 350, "1 of 1", used)
     _place(canvas, card, stage + 245, FY + 290, -4)
     if used:
-        stamp = _sticker("Claimed" if preview.status == "claimed" else "Link used",
-                         ORANGE, 44)
+        stamp = _sticker(
+            "Claimed" if preview.status == "claimed" else "Link used", ORANGE, 44
+        )
         _place(canvas, stamp, stage + 245, FY + 250, -12)
     else:
         sticker = _sticker("For you", PINK)
