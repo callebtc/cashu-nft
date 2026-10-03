@@ -1,293 +1,195 @@
-# Cashu Nutshell
+# Cashu NFT
 
-**Nutshell is a Chaumian Ecash wallet and mint for Bitcoin Lightning based on the Cashu protocol.**
+**The NFT is the JPG.** Cashu NFT turns any picture into a private, bearer
+collectible built on [Cashu](https://cashu.space) ecash. The ownership token
+travels inside the image file's EXIF header, so sending the JPG (by email, USB
+stick or a link) sends the NFT. There's no blockchain, no gas and no wallet
+extension; everything runs in an ordinary browser.
 
-<a href="https://pypi.org/project/cashu/"><img alt="Release" src="https://img.shields.io/pypi/v/cashu?color=black"></a> <a href="https://pepy.tech/project/cashu"> <img alt="Downloads" src="https://pepy.tech/badge/cashu"></a> <a href="https://app.codecov.io/gh/cashubtc/nutshell"><img alt="Coverage" src="https://img.shields.io/codecov/c/gh/cashubtc/nutshell"></a>
+- **Private by design.** Each NFT is a blind-signed credential. A
+  zero-knowledge proof shows on every transfer that the hidden picture hash
+  stays the same, so the mint stops double spends without learning who holds
+  what.
+- **A real marketplace.** Collectors list NFTs and buyers bid with ordinary
+  Cashu ecash from any mint. Offers are locked with NUT-14 hash time locks: the
+  seller is paid only by delivering the NFT, and unaccepted bids refund after
+  their deadline.
+- **Collections, profiles and activity.** Public collections, likes, follows,
+  public bids and a live activity feed.
 
-Cashu is a free and open-source [Ecash protocol](https://github.com/cashubtc/nuts) based on David Wagner's variant of Chaumian blinding called [Blind Diffie-Hellman Key Exchange](https://cypherpunks.venona.com/date/1996/03/msg01848.html) scheme written down [here](https://gist.github.com/RubenSomsen/be7a4760dd4596d06963d67baf140406).
+> Experimental, unaudited cryptography. Don't use it for anything of real
+> value yet.
 
-<p align="center">
-<a href="#the-cashu-protocol">Cashu protocol</a> ·
-<a href="#easy-install-nutshell-wallet">Quick Install</a> ·
-<a href="#manual-install-poetry">Manual install</a> ·
-<a href="#configuration">Configuration</a> ·
-<a href="#using-cashu">Using Cashu</a> ·
-<a href="#running-a-mint">Run a mint</a>
-</p>
+This repository is a fork of [Nutshell](https://github.com/cashubtc/nutshell),
+the reference Cashu implementation. The NFT code lives in `cashu/nft/` and the
+Pointcheval–Sanders credential scheme in `cashu/core/crypto/ps.py`. Nutshell's
+own README is in [NUTSHELL.md](NUTSHELL.md).
 
-### Feature overview
+## Requirements
 
-- Bitcoin Lightning support (LND, CLN, et al.)
-- Full support for the Cashu protocol [specifications](https://github.com/cashubtc/nuts)
-- Standalone CLI wallet and mint server
-- Wallet and mint library you can include in other Python projects
-- PostgreSQL and SQLite
-- Wallet with builtin Tor
-- Use multiple mints in a single wallet
+- Python 3.10 or newer and [Poetry](https://python-poetry.org/)
+- Node.js 20 or newer and npm (to build the web app)
 
-### Advanced features
-
-- Deterministic wallet with seed phrase backup ([NUT-13](https://github.com/cashubtc/nuts/blob/main/13.md))
-- Programmable ecash: P2PK and HTLCs ([NUT-10](https://github.com/cashubtc/nuts/blob/main/10.md))
-- Wallet and mint support for keyset rotations
-- DLEQ proofs for offline transactions ([NUT-12](https://github.com/cashubtc/nuts/blob/main/12.md))
-- Optional caching using Redis ([NUT-19](https://github.com/cashubtc/nuts/blob/main/19.md))
-- Optional authentication using Keycloak ([NUT-21](https://github.com/cashubtc/nuts/blob/main/21.md))
-
-## The Cashu protocol
-
-Different Cashu clients and mints use the same protocol to achieve interoperability. See the [documentation page](https://docs.cashu.space/) for more information on other projects. If you are interested in developing on your own Cashu project, please refer to the [protocol specs](https://github.com/cashubtc/nuts).
-
-## Easy Install: Nutshell wallet
-
-Use Python 3.12 for installation. With Python 3.12 and
-[pipx](https://pipx.pypa.io/) installed, run:
+## Run it locally
 
 ```bash
-pipx install cashu --python python3.12
-cashu --help
-```
+git clone https://github.com/callebtc/cashu-nft.git
+cd cashu-nft
 
-To update Cashu, use `pipx upgrade cashu`.
-
-Alternatively, install with pip in a virtual environment:
-
-```bash
-python3.12 -m venv .venv
-source .venv/bin/activate
-python -m pip install cashu
-cashu --help
-```
-
-On Windows, use `py -3.12 -m venv .venv` and activate with
-`.venv\Scripts\Activate.ps1` in PowerShell. For pipx, select the installed
-Python 3.12 executable with `--python`.
-
-To update a pip installation, use `python -m pip install --upgrade cashu`.
-
-Python 3.13/3.14 installations currently encounter Coincurve source-build failures:
-the version required by `bip32` has no wheels for these interpreters. Selecting
-Python 3.12 avoids that build. Pipx uses its default interpreter unless you pass
-`--python`; it does not automatically switch to Python 3.12.
-
-You can skip the entire next section about Poetry and jump right to [Using Cashu](#using-cashu).
-
-## Easy Install: Nutshell mint
-
-The easiest way to get a mint running is through Docker.
-
-You can build the image yourself by running the following command. Make sure to adjust the environment variables in `docker-compose.yaml`.
-
-```bash
-docker compose up mint
-```
-
-**Note:** If you have a local `.env` file, it will be copied into the container and may override docker-compose environment variables. To ensure the mint is accessible from your host machine, either:
-
-- Set `MINT_LISTEN_HOST=0.0.0.0` in your `.env` file, or
-- Use the pre-built Docker image command in the [Running a mint](#running-a-mint) section which sets environment variables directly.
-
-## Manual install: Poetry
-
-These steps help you install Python via pyenv and Poetry. If you already have Poetry running on your computer, you can skip this step and jump right to [Poetry: Install Cashu Nutshell](#poetry-install-cashu-nutshell).
-
-#### Poetry: Prerequisites
-
-```bash
-# on ubuntu:
-sudo apt install -y build-essential pkg-config libffi-dev libpq-dev zlib1g-dev libssl-dev python3-dev libsqlite3-dev ncurses-dev libbz2-dev libreadline-dev lzma-dev liblzma-dev
-
-# install python using pyenv
-curl https://pyenv.run | bash
-
-# !! follow the instructions of pyenv init to setup pyenv !!
-pyenv init
-
-# restart your shell (or source your .rc file), then install python:
-pyenv install 3.10
-
-# install poetry
-curl -sSL https://install.python-poetry.org | python3 - --version 2.3.2
-echo export PATH=\"$HOME/.local/bin:$PATH\" >> ~/.bashrc
-source ~/.bashrc
-```
-
-#### Poetry: Install Cashu Nutshell
-
-```bash
-# install nutshell
-git clone https://github.com/cashubtc/nutshell.git nutshell
-cd nutshell
-git checkout <latest_tag>
-pyenv local 3.10
+# Backend dependencies
 poetry install
+
+# Build the web app
+cd cashu/nft/portfolio_web
+npm ci
+npm run build
+cd ../../..
+
+# Start the NFT mint and web app on http://127.0.0.1:8401
+poetry run python -m cashu.nft.portfolio
 ```
 
-#### Poetry: Update Cashu
+On first start the server creates `data/nft-portfolio/` with a random
+32-byte mint seed (`mint.seed`) and an SQLite database. Open
+<http://127.0.0.1:8401>, choose **Get started** to create a collection, save
+the collection key it shows you, and add a JPG.
 
-To update Cashu to the newest version enter
+### Marketplace with a local test mint
+
+Bids are paid in ordinary Cashu ecash. Public mints work out of the box. To
+develop without real funds, run a local Nutshell mint whose Lightning
+invoices settle by themselves, and allow it over plain HTTP:
 
 ```bash
-git pull && poetry install
+# Terminal 1: fake-value ecash mint on http://127.0.0.1:3339
+poetry run python -m cashu.nft.dev_ecash_mint --port 3339 --fee-ppk 0
+
+# Terminal 2: the app, allowed to reach that mint
+NFT_MARKET_DEV_MINTS=http://127.0.0.1:3339 poetry run python -m cashu.nft.portfolio
 ```
 
-#### Poetry: Using the Nutshell wallet
+In the app, open **Wallet**, add `http://127.0.0.1:3339` as a mint and
+receive some sats. The invoice pays itself. Never set `NFT_MARKET_DEV_MINTS`
+in production.
 
-Cashu should be now installed. To execute the following commands, activate your virtual Poetry environment via
+### Frontend development
 
 ```bash
-poetry shell
+cd cashu/nft/portfolio_web
+npm run dev
 ```
 
-If you don't activate your environment, just prepend `poetry run` to all following commands.
+Vite serves the app on <http://127.0.0.1:5173> and proxies `/api` and `/v1`
+to the backend on port 8401. Set `NFT_PORTFOLIO_API` to point it at another
+backend.
 
 ## Configuration
 
-```bash
-mv .env.example .env
-# edit .env file
-vim .env
-```
+| Variable | Default | Purpose |
+|---|---|---|
+| `NFT_PORTFOLIO_DIR` | `data/nft-portfolio` | Database and mint seed |
+| `NFT_PORTFOLIO_HOST` / `NFT_PORTFOLIO_PORT` | `127.0.0.1` / `8401` | Listen address |
+| `NFT_PORTFOLIO_MAX_JPG_BYTES` | 10 MB | Upload limit per JPG |
+| `NFT_PORTFOLIO_MAX_CARDS` | unset (no limit) | Optional cap on NFTs per collection |
+| `NFT_PORTFOLIO_MAX_STORAGE_BYTES` | 1 GB | Total image storage |
+| `NFT_PORTFOLIO_TRUSTED_PROXY` | unset | Reverse proxy address (e.g. `127.0.0.1`) whose `X-Forwarded-For` is trusted for rate limiting |
+| `NFT_MARKET_DEV_MINTS` | unset | Development only: comma-separated mint URLs the marketplace may reach over plain HTTP on local addresses |
+| `PUBLIC_URL` (build time) | unset | Absolute site URL for social preview tags, e.g. `https://nft.example.com` |
+| `VITE_MINT_KEYSET_ID` (build time) | unset | Pin the expected mint keyset in the bundle |
 
-To use the wallet with the [public test mint](#test-instance), you need to change the appropriate entries in the `.env` file.
+## Deploying
 
-#### Test instance
-*Warning: this instance is just for demonstration purposes and development only. The satoshis are not real.*
+The app is a single process: the NFT mint, the marketplace settlement worker
+and the API all run in it, and it can serve the built web app itself. A typical
+setup puts it behind a TLS reverse proxy.
 
-Change the appropriate `.env` file settings to
+1. Build the web app with your public URL:
 
-```bash
-MINT_URL=https://testnut.cashu.space
-```
+   ```bash
+   cd cashu/nft/portfolio_web
+   npm ci
+   PUBLIC_URL=https://nft.example.com npm run build
+   ```
 
-# Using Cashu
+2. Install the backend into a virtualenv inside the checkout, then run it as
+   a service:
 
-```bash
-cashu info
-```
+   ```bash
+   poetry config virtualenvs.in-project true
+   poetry install --only main
+   ```
 
-This command shows information about your wallet.
+   For example, with systemd:
 
-#### Check balance
+   ```ini
+   # /etc/systemd/system/cashu-nft.service
+   [Unit]
+   Description=Cashu NFT
+   After=network-online.target
 
-```bash
-cashu balance
-```
+   [Service]
+   User=cashu-nft
+   WorkingDirectory=/opt/cashu-nft/app
+   Environment=NFT_PORTFOLIO_DIR=/opt/cashu-nft/data
+   Environment=NFT_PORTFOLIO_TRUSTED_PROXY=127.0.0.1
+   ExecStart=/opt/cashu-nft/app/.venv/bin/python -m cashu.nft.portfolio
+   Restart=on-failure
 
-#### Generate a Lightning invoice
+   [Install]
+   WantedBy=multi-user.target
+   ```
 
-This command will return a Lightning invoice that you need to pay to mint new ecash tokens.
+3. Put a reverse proxy in front. With [Caddy](https://caddyserver.com):
 
-```bash
-cashu invoice 420
-```
+   ```caddy
+   nft.example.com {
+   	encode zstd gzip
+   	request_body {
+   		max_size 12MB
+   	}
+   	reverse_proxy 127.0.0.1:8401
+   }
+   ```
 
-The client will check every few seconds if the invoice has been paid. If you abort this step but still pay the invoice, you can use the command `cashu invoice <amount> --id <id>`.
+   If you serve the built files from the proxy instead, route `/api/*` and
+   `/v1/*` to the backend. Any Content-Security-Policy you add must allow
+   `connect-src 'self' https: wss:`, so the browser wallet can reach ecash
+   mints.
 
-#### Pay a Lightning invoice
+**Back up the data directory, and keep a copy off the server.** `mint.seed`
+is the mint's identity: losing it invalidates every NFT ever issued, and
+browsers that already know the old mint refuse a new one. The database holds
+the ownership records and encrypted wallet backups. Stop the service, or copy
+the SQLite file with `sqlite3 .backup`, before you take a copy.
 
-```bash
-cashu pay lnbc120n1p3jfmdapp5r9jz...
-```
-
-#### Send tokens
-
-To send tokens to another user, enter
-
-```bash
-cashu send 69
-```
-
-You should see the encoded token. Copy the token and send it to another user such as via email or a messenger. The token looks like this:
-
-```bash
-cashuBo2F0gaJhaUgA2...
-```
-
-#### Receive tokens
-
-To receive tokens, another user enters:
-
-```bash
-cashu receive cashuBo2F0gaJhaUgA2...
-```
-
-# Running a mint
-
-This command runs the mint on your local computer. Skip this step if you want to use the [public test mint](#test-instance) instead.
-
-## Docker
-
-Run the mint using the pre-built Docker image. This method sets environment variables directly and works reliably regardless of local `.env` files:
-
-```bash
-docker run -d -p 3338:3338 --name nutshell -e MINT_BACKEND_BOLT11_SAT=FakeWallet -e MINT_LISTEN_HOST=0.0.0.0 -e MINT_LISTEN_PORT=3338 -e MINT_PRIVATE_KEY=TEST_PRIVATE_KEY cashubtc/nutshell:0.22.0 poetry run mint
-```
-
-## From this repository
-
-Before you can run your own mint, make sure to enable a Lightning backend in `MINT_BACKEND_BOLT11_SAT` and set `MINT_PRIVATE_KEY` in your `.env` file.
+## Tests
 
 ```bash
-poetry run mint
+# Backend
+poetry run pytest tests/test_nft_portfolio.py tests/test_nft_market.py tests/test_nft_market_browser.py
+
+# Web app: unit tests and type check
+cd cashu/nft/portfolio_web
+npm test
+npm run typecheck
 ```
 
-For testing, you can use Nutshell without a Lightning backend by setting `MINT_BACKEND_BOLT11_SAT=FakeWallet` in the `.env` file.
+The test suite starts its own FakeWallet ecash mint, so no Lightning node is
+needed. The browser end-to-end tests also need Node and the web app's
+dependencies (`npm ci` in `cashu/nft/portfolio_web`).
 
-### NUT-19 Caching with Redis
+## How it works
 
-To cache HTTP responses ([NUT-19](https://github.com/cashubtc/nuts/blob/main/19.md)), you can either install Redis manually or use the docker compose file in `docker/redis/docker-compose.yaml` to start Redis in a container.
+- [cashu/nft/portfolio_web/README.md](cashu/nft/portfolio_web/README.md) covers
+  the web app, its trust model, transfer JPGs and transfer links.
+- [cashu/nft/BLIND_ISSUANCE.md](cashu/nft/BLIND_ISSUANCE.md) covers blind hash
+  issuance.
+- [cashu/nft/MARKETPLACE_PLAN.md](cashu/nft/MARKETPLACE_PLAN.md) covers the
+  marketplace protocol (funded HTLC offers, preimage escrow, delivery receipts)
+  and its implementation log.
+- The app's own **How it works** page explains it for collectors, with a
+  separate cryptography section.
 
-Edit the `.env` file and uncomment the Redis lines:
+## License
 
-```bash
-MINT_REDIS_CACHE_ENABLED=TRUE
-MINT_REDIS_CACHE_URL=redis://localhost:6379
-```
-
-### NUT-21 Authentication with Keycloak
-
-Cashu supports clear and blind authentication as defined in [NUT-21](https://github.com/cashubtc/nuts/blob/main/21.md) and [NUT-22](https://github.com/cashubtc/nuts/blob/main/22.md) to limit the use of a mint to a registered set of users. Clear authentication is supported via an OIDC provider such as Keycloak. You can set up and run Keycloak instance using the docker compose file `docker/keycloak/docker-compose.yml` in this repository.
-
-### Migrate SQLite mint DB to Postgres
-
-Use the standalone tool at `cashu/mint/sqlite_to_postgres.py` to migrate a mint database from SQLite to Postgres.
-
-```bash
-# 1) optionally reset the target Postgres database (DROPS ALL DATA)
-psql -U <user> -h <host> -p <port> -d <database> -c "DROP SCHEMA public CASCADE; CREATE SCHEMA public; GRANT ALL PRIVILEGES ON SCHEMA public TO <user>;"
-
-# 2) run migration (inside poetry env)
-poetry run python cashu/mint/sqlite_to_postgres.py \
-  --sqlite data/mint/mint.sqlite3 \
-  --postgres postgres://<user>:<pass>@<host>:<port>/<database> \
-  --batch-size 2000
-```
-
-- The tool aborts if the Postgres DB appears populated and prints the exact reset command with your connection details.
-- After copying, it verifies row counts and compares the `balance` view across both databases.
-
-# Running tests
-
-To run the tests in this repository, first install the dev dependencies with
-
-```bash
-poetry install --with dev
-```
-
-Then, make sure to set up your mint's `.env` file to use a fake Lightning backend and disable Tor:
-
-```bash
-MINT_BACKEND_BOLT11_SAT=FakeWallet
-TOR=FALSE
-```
-
-You can run the tests with
-
-```bash
-poetry run pytest tests
-```
-
-# Contributing
-
-Developers are invited to contribute to Nutshell. Please see the [contribution guide](CONTRIBUTING.md).
+MIT, like Nutshell. See [LICENSE.md](LICENSE.md).
