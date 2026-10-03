@@ -65,6 +65,8 @@ button, input, textarea, select { font: inherit; color: inherit; }
 .field select option { color: var(--text); background: var(--paper); }
 button { cursor: pointer; background: none; border: 0; padding: 0; }
 button:disabled { cursor: not-allowed; }
+/* Button labels are never selectable: a long press (hold-to-confirm on phones) must not select text or open the callout. Safari needs the prefix. */
+button, [role="button"], .btn { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
 a { color: inherit; }
 :focus-visible { outline: 3px solid var(--blue); outline-offset: 3px; border-radius: 8px; }
 ::selection { background: var(--lime); color: #111; }
@@ -106,7 +108,7 @@ a { color: inherit; }
 .footer .nav-link:hover { background: transparent; border-color: var(--bg); }
 
 /* Buttons: they physically press in */
-.btn { position: relative; display: inline-flex; align-items: center; justify-content: center; gap: 8px; height: 44px; padding: 0 18px; border-radius: 999px; border: 2px solid var(--ink); background: var(--paper); color: var(--text); font-weight: 750; font-size: 14px; white-space: nowrap; user-select: none; box-shadow: var(--shadow); transition: transform .12s var(--ease), box-shadow .12s var(--ease), background .15s; }
+.btn { position: relative; display: inline-flex; align-items: center; justify-content: center; gap: 8px; height: 44px; padding: 0 18px; border-radius: 999px; border: 2px solid var(--ink); background: var(--paper); color: var(--text); font-weight: 750; font-size: 14px; white-space: nowrap; box-shadow: var(--shadow); transition: transform .12s var(--ease), box-shadow .12s var(--ease), background .15s; }
 .btn svg { flex: none; }
 .btn:not(:disabled):hover { transform: translate(-2px, -2px); box-shadow: 6px 6px 0 var(--ink); }
 .btn:not(:disabled):active { transform: translate(4px, 4px); box-shadow: 0 0 0 var(--ink); }

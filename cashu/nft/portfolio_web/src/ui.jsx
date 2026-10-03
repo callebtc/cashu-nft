@@ -228,7 +228,7 @@ export function HoldButton({ onComplete, disabled = false, children, duration = 
     onPointerDown={(e) => { if (e.button === 0) start(); }} onPointerUp={stop} onPointerLeave={stop} onPointerCancel={stop}
     onKeyDown={(e) => { if ((e.key === ' ' || e.key === 'Enter') && !e.repeat) { e.preventDefault(); start(); } }}
     onKeyUp={(e) => { if (e.key === ' ' || e.key === 'Enter') stop(); }}
-    onClick={(e) => e.preventDefault()} aria-describedby="hold-hint">
+    onClick={(e) => e.preventDefault()} onContextMenu={(e) => e.preventDefault()} aria-describedby="hold-hint">
     <motion.span className="hold-fill" style={{ width }} aria-hidden="true" />
     <span className="hold-label">{icon}{holding ? 'Keep holding…' : children}</span>
   </motion.button>;
