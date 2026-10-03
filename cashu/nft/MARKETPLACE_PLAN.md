@@ -955,6 +955,13 @@ and `make check` clean.
 
 ## Product changes (2026-10-02)
 
+- **Link previews (2026-10-03).** `/p/{pubkey}` and `/claim/{id}` return
+  `index.html` with that page's title, description and OpenGraph/Twitter
+  image, using only data the public API already returns. The images
+  (`/api/og/p/{pk}.jpg`, `/api/og/claim/{id}.jpg`, 1200×630) are drawn with
+  Pillow in the app's style from fonts vendored in `cashu/nft/fonts/`, and
+  cached in memory by a version of what they show. In production, Caddy must
+  route those two page paths to the app for crawlers to see the tags.
 - **Sale price is public.** At the user's request, completed sales now show
   the sale price (the accepted offer's net price) in `/api/market/sales` and
   in `sale` activity events. This replaces the original rule that offer

@@ -39,6 +39,7 @@ from cashu.nft.portfolio import (
     create_portfolio_app,
 )
 from cashu.nft.portfolio_jpg import normalize_jpg, split_transfer_jpg, validate_jpg
+from cashu.nft.portfolio_og import profile_version
 from cashu.nft.wallet import TOKEN_PREFIX, NFTClient
 
 
@@ -1048,3 +1049,22 @@ def test_profile_picture_is_scaled_stripped_and_owner_only(client):
     )
     assert alice.post(f"{alice.base}/avatar/remove").json()["avatar"] is None
     assert client.get(f"/api/avatars/{alice.pubkey}.jpg").status_code == 404
+
+
+def test_collection_preview_image(client):
+    alice = Profile(client)
+    alice.create()
+    minted_card(alice, make_jpg(color=(30, 120, 200)))
+    assert client.get(f"/api/og/p/{'ab' * 32}.jpg").status_code == 404
+
+    stale = client.get(f"/api/og/p/{alice.pubkey}.jpg?v=old")
+    assert stale.status_code == 200
+    assert stale.headers["content-type"] == "image/jpeg"
+    assert stale.headers["cache-control"] == "public, max-age=300"
+    with Image.open(io.BytesIO(stale.content)) as image:
+        assert (image.format, image.size) == ("JPEG", (1200, 630))
+
+    version = profile_version(client.get(f"/api/profiles/{alice.pubkey}").json())
+    current = client.get(f"/api/og/p/{alice.pubkey}.jpg?v={version}")
+    assert current.content == stale.content  # served from the render cache
+    assert "immutable" in current.headers["cache-control"]

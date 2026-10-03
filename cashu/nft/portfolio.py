@@ -11,10 +11,11 @@ import re
 import secrets
 import time
 import uuid
-from collections import defaultdict, deque
+from collections import OrderedDict, defaultdict, deque
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Deque, Dict, List, Literal, Optional, cast
+from typing import Callable, Deque, Dict, List, Literal, Optional, cast
+from urllib.parse import urlparse
 
 import uvicorn
 from coincurve import PublicKeyXOnly
@@ -44,6 +45,22 @@ from .market import Executor, Market, market_router
 from .market_net import MintNetPolicy
 from .portfolio_jpg import avatar_jpg, normalize_jpg, split_transfer_jpg, validate_jpg
 from .portfolio_links import LinkRequest, Links
+from .portfolio_og import (
+    collection_meta,
+    fan,
+    link_meta,
+    link_version,
+    profile_version,
+    site_base,
+    with_meta,
+)
+from .portfolio_og_image import (
+    Card,
+    CollectionPreview,
+    LinkPreview,
+    collection_image,
+    link_image,
+)
 from .portfolio_social import (
     CollectionSort,
     NFTSort,
@@ -481,8 +498,9 @@ def create_portfolio_app(
         response.headers["Permissions-Policy"] = (
             "camera=(), microphone=(), geolocation=()"
         )
+        # Routes serving versioned URLs (avatars, previews) set their own.
         if request.url.path.startswith(("/api/", "/v1/")):
-            response.headers["Cache-Control"] = "no-store"
+            response.headers.setdefault("Cache-Control", "no-store")
         return response
 
     @app.exception_handler(ValueError)
@@ -982,6 +1000,92 @@ def create_portfolio_app(
             raise HTTPException(404, "Image not found.")
         return Response(bytes(row["jpg"]), media_type="image/jpeg")
 
+    # Social preview images. Renders are cached by content version, so a
+    # crawler can't force fresh renders by varying ?v=.
+    og_cache: "OrderedDict[str, bytes]" = OrderedDict()
+
+    async def stored_jpg(h: str) -> Optional[bytes]:
+        row = await portfolio.db.fetchone(
+            "SELECT jpg FROM portfolio_images WHERE h=:h", {"h": h}
+        )
+        return bytes(row["jpg"]) if row else None
+
+    async def avatar_row(pubkey: str) -> Optional[dict]:
+        row = await portfolio.db.fetchone(
+            "SELECT jpg, updated FROM portfolio_avatars WHERE pubkey=:p",
+            {"p": pubkey},
+        )
+        return {"jpg": bytes(row["jpg"]), "updated": row["updated"]} if row else None
+
+    def og_host(request: Request) -> str:
+        index = WEB_DIR / "index.html"
+        base = site_base(index.read_text()) if index.exists() else ""
+        return urlparse(base).netloc or request.url.netloc
+
+    async def og_jpg(
+        key: str, version: str, asked: str, render: Callable[[], bytes]
+    ) -> Response:
+        jpg = og_cache.get(key + version)
+        if jpg is None:
+            jpg = await run_in_threadpool(render)
+            og_cache[key + version] = jpg
+            while len(og_cache) > 64:
+                og_cache.popitem(last=False)
+        else:
+            og_cache.move_to_end(key + version)
+        return Response(
+            jpg,
+            media_type="image/jpeg",
+            headers={
+                "Cache-Control": "public, max-age=31536000, immutable"
+                if asked == version
+                else "public, max-age=300"
+            },
+        )
+
+    @app.get("/api/og/p/{pubkey}.jpg")
+    async def og_collection(pubkey: str, request: Request, v: str = ""):
+        profile = await get_profile(pubkey)
+        avatar = await avatar_row(pubkey) if profile["avatar"] else None
+        cards = [
+            Card(c["title"] or "", await stored_jpg(c["h"])) for c in fan(profile)
+        ]
+        preview = CollectionPreview(
+            pubkey=pubkey,
+            name=profile["name"] or "",
+            avatar=avatar["jpg"] if avatar else None,
+            nfts=sum(c["status"] == "owned" for c in profile["cards"]),
+            followers=profile["followers"],
+            likes=profile["likes"],
+            cards=cards,
+        )
+        host = og_host(request)
+        return await og_jpg(
+            f"p/{pubkey}/",
+            profile_version(profile),
+            v,
+            lambda: collection_image(preview, host),
+        )
+
+    @app.get("/api/og/claim/{link_id}.jpg")
+    async def og_link(link_id: str, request: Request, v: str = ""):
+        link = await get_link(link_id)
+        avatar = await avatar_row(link["sender"])
+        preview = LinkPreview(
+            sender=link["sender"],
+            sender_name=link["sender_name"] or "",
+            avatar=avatar["jpg"] if avatar else None,
+            card=Card(link["title"] or "", await stored_jpg(link["h"])),
+            status=link["status"],
+        )
+        host = og_host(request)
+        return await og_jpg(
+            f"claim/{link_id}/",
+            link_version(link, avatar["updated"] if avatar else None),
+            v,
+            lambda: link_image(preview, host),
+        )
+
     # Retain bearer-redemption compatibility, but do not expose unauthenticated
     # minting: it would bypass the portfolio's upload and storage quotas.
     router = create_router(portfolio.ledger)
@@ -1015,10 +1119,7 @@ def create_portfolio_app(
     @app.get("/explore")
     @app.get("/explore/nfts")
     @app.get("/activity")
-    @app.get("/p/{pubkey}")
-    async def frontend(pubkey: Optional[str] = None):
-        if pubkey is not None:
-            validate_pubkey(pubkey)
+    async def frontend():
         if not (WEB_DIR / "index.html").exists():
             return JSONResponse(
                 {
@@ -1030,6 +1131,25 @@ def create_portfolio_app(
             WEB_DIR / "index.html", headers={"Cache-Control": "no-cache"}
         )
 
+    def page_with_meta(meta_for) -> Response:
+        """index.html with this page's social preview tags."""
+        html = (WEB_DIR / "index.html").read_text()
+        html = with_meta(html, meta_for(site_base(html)))
+        return Response(
+            html, media_type="text/html", headers={"Cache-Control": "no-cache"}
+        )
+
+    @app.get("/p/{pubkey}")
+    async def profile_page(pubkey: str):
+        validate_pubkey(pubkey)
+        if not (WEB_DIR / "index.html").exists():
+            return await frontend()
+        try:
+            profile = await get_profile(pubkey)
+        except HTTPException:
+            return await frontend()
+        return page_with_meta(lambda base: collection_meta(base, profile))
+
     @app.get("/market/{listing_id}")
     async def market_page(listing_id: str):
         if not re.fullmatch(r"[0-9a-f]{32}", listing_id):
@@ -1040,7 +1160,15 @@ def create_portfolio_app(
     async def claim_page(link_id: str):
         if not re.fullmatch(r"[0-9a-f]{32}", link_id):
             raise HTTPException(404, "This link doesn't exist.")
-        return await frontend()
+        if not (WEB_DIR / "index.html").exists():
+            return await frontend()
+        try:
+            link = await links.get(link_id)
+        except HTTPException:
+            return await frontend()
+        avatar = await avatar_row(link["sender"])
+        version = link_version(link, avatar["updated"] if avatar else None)
+        return page_with_meta(lambda base: link_meta(base, link, version))
 
     return app
 
