@@ -3,8 +3,8 @@ import { createRoot } from 'react-dom/client';
 import { Menu } from '@base-ui/react/menu';
 import { AnimatePresence, MotionConfig, motion } from 'motion/react';
 import { Toaster, toast } from 'sonner';
-import { ArrowLeft, ArrowRight, Check, Compass, Monitor, Moon, Sun, Image as ImageIcon, Download, Ellipsis, Eye, EyeOff, FileJson, HandCoins, ImageDown, Info, KeyRound, Link2, Plus,
-  Pencil, Radio, RefreshCw, RotateCcw, Send, ShieldX, Trash2, Upload, Undo2, Wallet } from 'lucide-react';
+import { ArrowLeft, ArrowRight, Check, Compass, Monitor, Moon, Sun, Image as ImageIcon, Download, Ellipsis, Eye, EyeOff, FileJson, HandCoins, ImageDown, Info, KeyRound, Link2, Menu as MenuIcon, Plus,
+  Pencil, Radio, RefreshCw, RotateCcw, Send, ShieldX, Store, Trash2, Upload, Undo2, Wallet } from 'lucide-react';
 import '@fontsource-variable/inter';
 import '@fontsource-variable/bricolage-grotesque';
 import '@fontsource/jetbrains-mono/400.css';
@@ -419,6 +419,9 @@ function AddDialog({ open, close, config, wallet, onAdded }) {
 
 /* System / light / dark. theme.js applies the choice before first paint. */
 const THEMES = [['system', 'System', Monitor], ['light', 'Light', Sun], ['dark', 'Dark', Moon]];
+// Top bar destinations: [href, label, route page, icon]. Market always stays in the bar; the rest
+// fold into a menu on compact screens and on collection pages.
+const NAV = [['/market', 'Market', 'market', Store], ['/explore', 'Explore', 'explore', Compass], ['/activity', 'Activity', 'activity', Radio], ['/how-it-works', 'How it works', 'how', Info]];
 function useTheme() {
   const api = typeof window !== 'undefined' ? window.cashuTheme : null;
   const [state, setState] = useState(() => ({ mode: api?.get() || 'system', dark: api?.isDark() || false }));
@@ -432,7 +435,7 @@ function useTheme() {
 function ThemeMenu({ theme, setTheme }) {
   const Current = THEMES.find(([m]) => m === theme.mode)?.[2] || Monitor;
   return <Menu.Root>
-    <Menu.Trigger className="theme-btn" aria-label={`Theme: ${theme.mode}`}><Current size={17} /></Menu.Trigger>
+    <Menu.Trigger className="icon-btn" aria-label={`Theme: ${theme.mode}`}><Current size={17} /></Menu.Trigger>
     <Menu.Portal><Menu.Positioner className="menu-layer" sideOffset={6} align="end"><Menu.Popup className="menu menu-compact">
       {THEMES.map(([mode, label, Icon]) => <Menu.Item key={mode} className="menu-item" onClick={() => setTheme(mode)}>
         <Icon size={15} />{label}{theme.mode === mode && <Check size={15} className="menu-check" />}
@@ -655,38 +658,51 @@ function App() {
     try { const summary = await toggleRelation('follows', target, on); applySummary(target, summary); toast.success(on ? `Following ${profile?.name || 'this collection'}.` : 'Unfollowed.'); }
     catch (e) { toast.error(e.message); }
   };
+  const navActive = (page) => route.page === page || (page === 'market' && route.page === 'listing');
   const verbs = { mint: 'minted', receive: 'received', collection: 'joined', like: 'liked', follow: 'followed', sale: 'bought' };
   const ticker = home?.activity?.length ? home.activity.map((e) => `${e.actor_name || 'Someone'} ${verbs[e.kind]} ${e.title || e.target_name || ''}`.trim())
     : ['The NFT is the JPG', 'Free mint', 'Send it like a meme', 'No seed phrase drama', 'Your key, your vibes', '1 of 1 by default', 'gm'];
 
   return <MotionConfig reducedMotion="user">
-    <header className="topbar">
+    <header className={`topbar ${identity ? '' : 'is-guest'}`}>
       <div className="topbar-inner">
-        <a className="brand" href="/" onClick={(e) => { e.preventDefault(); navigate('/'); }}><span className="brand-mark" aria-hidden="true" />Cashu NFT</a>
-        <nav aria-label="Main">
-          {(route.page !== 'profile' ? [['/market', 'Market', 'market'], ['/explore', 'Explore', 'explore'], ['/activity', 'Activity', 'activity'], ['/how-it-works', 'How it works', 'how']] : [['/market', 'Market', 'market']]).map(([href, label, page]) =>
-            <a key={href} className={`nav-link ${route.page === page || (page === 'market' && route.page === 'listing') ? 'is-active' : ''} ${page === 'market' ? 'nav-market' : ''}`} href={href} onClick={(e) => { e.preventDefault(); navigate(href); }}>{label}</a>)}
+        <a className="brand" href="/" onClick={(e) => { e.preventDefault(); navigate('/'); }}><span className="brand-mark" aria-hidden="true" /><span className="brand-name">Cashu NFT</span></a>
+        <nav className="topnav" aria-label="Main">
+          {(route.page === 'profile' ? NAV.slice(0, 1) : NAV).map(([href, label, page]) =>
+            <a key={href} className={`nav-link ${navActive(page) ? 'is-active' : ''} ${page === 'market' ? 'nav-market' : ''}`} aria-current={navActive(page) ? 'page' : undefined}
+              href={href} onClick={(e) => { e.preventDefault(); navigate(href); }}>{label}</a>)}
+        </nav>
+        <div className="topbar-actions">
+          {/* Guests have no profile menu, so the folded links get their own. */}
+          {!identity && <Menu.Root>
+            <Menu.Trigger className={`icon-btn ${route.page === 'profile' ? '' : 'menu-mobile'}`} aria-label="Menu"><MenuIcon size={18} /></Menu.Trigger>
+            <Menu.Portal><Menu.Positioner className="menu-layer" sideOffset={6} align="end"><Menu.Popup className="menu">
+              {NAV.map(([href, label, page, Icon]) => <Menu.Item key={href} className={`menu-item ${page === 'market' ? 'menu-guest-market' : ''}`} onClick={() => navigate(href)}>
+                <Icon size={15} />{label}{navActive(page) && <Check size={15} className="menu-check" />}
+              </Menu.Item>)}
+            </Menu.Popup></Menu.Positioner></Menu.Portal>
+          </Menu.Root>}
           <ThemeMenu theme={theme} setTheme={setTheme} />
           {identity
             ? <Menu.Root>
-              <Menu.Trigger className="profile-pill"><Identicon pubkey={identity.pubkey} size={24} /><span>Profile</span>
+              <Menu.Trigger className="profile-pill" aria-label="Profile"><Identicon pubkey={identity.pubkey} size={24} /><span className="profile-label">Profile</span>
                 {market.unread > 0 && <motion.span key={market.unread} className="unread" initial={{ scale: .5 }} animate={{ scale: 1 }} aria-label={`${market.unread} unread`}>{market.unread > 9 ? '9+' : market.unread}</motion.span>}</Menu.Trigger>
               <Menu.Portal><Menu.Positioner className="menu-layer" sideOffset={6} align="end"><Menu.Popup className="menu">
                 <Menu.Item className="menu-item" onClick={() => navigate(`/p/${identity.pubkey}`)}><ImageIcon size={15} />My collection</Menu.Item>
                 <Menu.Item className="menu-item" onClick={() => navigate('/wallet')}><Wallet size={15} />Wallet</Menu.Item>
                 <Menu.Item className="menu-item" onClick={() => navigate('/offers')}><HandCoins size={15} />Offers{market.unread > 0 && <span className="unread unread-inline">{market.unread}</span>}</Menu.Item>
-                {/* On collection pages these move here from the top bar; on phones they always live here. */}
+                {/* On collection pages these move here from the top bar; on compact screens they always live here. */}
                 <Menu.Separator className={`menu-sep ${route.page === 'profile' ? '' : 'menu-mobile'}`} />
-                {[['/explore', 'Explore', <Compass key="i" size={15} />], ['/activity', 'Activity', <Radio key="i" size={15} />], ['/how-it-works', 'How it works', <Info key="i" size={15} />]].map(([href, label, icon]) =>
-                  <Menu.Item key={href} className={`menu-item ${route.page === 'profile' ? '' : 'menu-mobile'}`} onClick={() => navigate(href)}>{icon}{label}</Menu.Item>)}
+                {NAV.slice(1).map(([href, label, page, Icon]) =>
+                  <Menu.Item key={href} className={`menu-item ${route.page === 'profile' ? '' : 'menu-mobile'}`} onClick={() => navigate(href)}><Icon size={15} />{label}{navActive(page) && <Check size={15} className="menu-check" />}</Menu.Item>)}
                 <Menu.Separator className="menu-sep" />
                 <Menu.Item className="menu-item" onClick={openCreate} disabled={!config}><Plus size={15} />Start another collection</Menu.Item>
                 <Menu.Item className="menu-item" onClick={() => { setName(''); setDialog('import'); }}><KeyRound size={15} />Import a key</Menu.Item>
                 <Menu.Item className="menu-item" onClick={() => setDialog('open')}><Link2 size={15} />Open by public key</Menu.Item>
               </Menu.Popup></Menu.Positioner></Menu.Portal>
             </Menu.Root>
-            : <Button variant="primary" size="sm" onClick={openCreate} disabled={!config}>Get started</Button>}
-        </nav>
+            : <Button variant="primary" size="sm" className="topbar-cta" onClick={openCreate} disabled={!config}>Get started</Button>}
+        </div>
       </div>
     </header>
 
