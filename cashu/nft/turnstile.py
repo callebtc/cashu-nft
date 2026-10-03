@@ -9,6 +9,7 @@ from typing import List, Optional
 
 import httpx
 from fastapi import HTTPException, Request
+from loguru import logger
 from pydantic import BaseModel, Field, ValidationError
 
 SITEVERIFY_URL = "https://challenges.cloudflare.com/turnstile/v0/siteverify"
@@ -33,6 +34,9 @@ class Turnstile:
     async def verify(self, request: Request) -> None:
         token = request.headers.get(TOKEN_HEADER, "")
         if not token or len(token) > MAX_TOKEN_LENGTH:
+            logger.info(
+                f"Turnstile: refused an upload without a usable token ({len(token)} chars)"
+            )
             raise HTTPException(403, FAILED_MESSAGE)
         form = {"secret": self.secret, "response": token}
         if request.client:
@@ -40,9 +44,11 @@ class Turnstile:
         try:
             response = await self.client.post(SITEVERIFY_URL, data=form)
             result = SiteverifyResult.model_validate_json(response.content)
-        except (httpx.HTTPError, ValidationError):
+        except (httpx.HTTPError, ValidationError) as error:
+            logger.warning(f"Turnstile: siteverify unavailable: {error!r}")
             raise HTTPException(503, UNAVAILABLE_MESSAGE)
         if not result.success:
+            logger.info(f"Turnstile: Cloudflare refused a token: {result.error_codes}")
             raise HTTPException(403, FAILED_MESSAGE)
 
     async def aclose(self) -> None:
