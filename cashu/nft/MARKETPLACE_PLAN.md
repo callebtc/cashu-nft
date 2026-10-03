@@ -955,6 +955,14 @@ and `make check` clean.
 
 ## Product changes (2026-10-02)
 
+- **Content filtering (2026-10-03).** New NFTs, received transfer JPGs and
+  profile pictures are scored by Marqo's nsfw-image-detection-384 (ONNX,
+  CPU) before the server stores them. A score of 0.8 or more refuses the
+  upload with 422 and records the image's SHA-256 and colour difference hash
+  in `portfolio_rejected_images`; later uploads that match exactly or nearly
+  are refused without the model. Cloudflare was considered and dropped: it
+  has no NSFW filter for uploads, and its CSAM scanner needs the domain's DNS
+  on Cloudflare.
 - **Link previews (2026-10-03).** `/p/{pubkey}` and `/claim/{id}` return
   `index.html` with that page's title, description and OpenGraph/Twitter
   image, using only data the public API already returns. The images

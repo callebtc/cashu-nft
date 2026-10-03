@@ -119,6 +119,7 @@ class BrowserPortfolio:
             raise HTTPException(400, "Unknown wallet action.")
         if kind == "mint":
             jpg = await run_in_threadpool(normalize_jpg, data)
+            await self.portfolio.moderation.check(pubkey, jpg)
         elif kind == "receive":
             jpg, token = split_transfer_jpg(data)
             if token:
@@ -127,6 +128,7 @@ class BrowserPortfolio:
                     "Extract the transfer token locally before uploading the public JPG.",
                 )
             await run_in_threadpool(validate_jpg, jpg)
+            await self.portfolio.moderation.check(pubkey, jpg)
         else:
             jpg = b""
         async with self.db.get_connection(locks=LOCKS) as conn:

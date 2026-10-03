@@ -43,6 +43,7 @@ from .imgmeta import embed_token
 from .ledger import AlreadyMintedError, AlreadySpentError, NFTError, PSLedger
 from .market import Executor, Market, market_router
 from .market_net import MintNetPolicy
+from .moderation import DEFAULT_THRESHOLD, Classifier, Moderation, NSFWClassifier
 from .portfolio_jpg import avatar_jpg, normalize_jpg, split_transfer_jpg, validate_jpg
 from .portfolio_links import LinkRequest, Links
 from .portfolio_og import (
@@ -161,6 +162,8 @@ class Portfolio:
         max_jpg_bytes: int = 10 * 1024 * 1024,
         max_cards: Optional[int] = None,
         max_storage_bytes: int = 1024**3,
+        classifier: Optional[Classifier] = None,
+        nsfw_threshold: float = DEFAULT_THRESHOLD,
     ):
         directory = Path(data_dir)
         directory.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -169,9 +172,11 @@ class Portfolio:
         self.max_jpg_bytes = max_jpg_bytes
         self.max_cards = max_cards
         self.max_storage_bytes = max_storage_bytes
+        self.moderation = Moderation(self.db, classifier, nsfw_threshold)
 
     async def migrate(self) -> None:
         await self.ledger.migrate()
+        await self.moderation.migrate()
         async with self.db.get_connection() as conn:
             for statement in (
                 """CREATE TABLE IF NOT EXISTS portfolio_profiles (
@@ -271,6 +276,7 @@ class Portfolio:
             raise HTTPException(
                 413, "The normalized JPG is too large. Use a smaller image."
             )
+        await self.moderation.check(pubkey, jpg)
         h = hash_asset(jpg)
         secret = secrets.randbelow(curve_order - 1) + 1
         commitment, _ = prove_owner_secret(secret)
@@ -306,6 +312,7 @@ class Portfolio:
                 400,
                 "The embedded token does not belong to this JPG. Nothing was redeemed.",
             )
+        await self.moderation.check(pubkey, jpg)
         if old.keyset_id != self.ledger.keyset.keyset_id:
             raise HTTPException(400, "This NFT belongs to another mint.")
         secret = secrets.randbelow(curve_order - 1) + 1
@@ -435,8 +442,17 @@ def create_portfolio_app(
     market_dev_mints: Optional[List[str]] = None,
     executor_interval: float = 5.0,
     run_executor: bool = True,
+    nsfw_model: Optional[str] = None,
+    nsfw_threshold: float = DEFAULT_THRESHOLD,
 ) -> FastAPI:
-    portfolio = Portfolio(data_dir, max_jpg_bytes, max_cards, max_storage_bytes)
+    portfolio = Portfolio(
+        data_dir,
+        max_jpg_bytes,
+        max_cards,
+        max_storage_bytes,
+        NSFWClassifier(nsfw_model) if nsfw_model else None,
+        nsfw_threshold,
+    )
     browser_wallet = BrowserPortfolio(portfolio)
     social = Social(portfolio)
     links = Links(portfolio)
@@ -944,6 +960,7 @@ def create_portfolio_app(
             jpg = await run_in_threadpool(avatar_jpg, raw)
         except ValueError as error:
             raise HTTPException(400, str(error))
+        await portfolio.moderation.check(pubkey, jpg)
         await portfolio.db.execute(
             """INSERT INTO portfolio_avatars(pubkey,jpg,updated) VALUES(:p,:j,:t)
             ON CONFLICT(pubkey) DO UPDATE SET jpg=:j, updated=:t""",
@@ -1195,6 +1212,12 @@ def main() -> None:
             for u in os.environ.get("NFT_MARKET_DEV_MINTS", "").split(",")
             if u.strip()
         ],
+        # The ONNX model from scripts/export_nsfw_model.py. Unset disables
+        # the classifier; previously rejected images stay refused.
+        nsfw_model=os.environ.get("NFT_PORTFOLIO_NSFW_MODEL") or None,
+        nsfw_threshold=float(
+            os.environ.get("NFT_PORTFOLIO_NSFW_THRESHOLD", str(DEFAULT_THRESHOLD))
+        ),
     )
     # Behind a reverse proxy, trust X-Forwarded-For only from the proxy's
     # address so per-client rate limits see real client IPs.

@@ -93,9 +93,38 @@ backend.
 | `NFT_PORTFOLIO_MAX_CARDS` | unset (no limit) | Optional cap on NFTs per collection |
 | `NFT_PORTFOLIO_MAX_STORAGE_BYTES` | 1 GB | Total image storage |
 | `NFT_PORTFOLIO_TRUSTED_PROXY` | unset | Reverse proxy address (e.g. `127.0.0.1`) whose `X-Forwarded-For` is trusted for rate limiting |
+| `NFT_PORTFOLIO_NSFW_MODEL` | unset (classifier off) | Path to the NSFW image classifier (see [Content filtering](#content-filtering)) |
+| `NFT_PORTFOLIO_NSFW_THRESHOLD` | `0.8` | NSFW score at which an upload is refused |
 | `NFT_MARKET_DEV_MINTS` | unset | Development only: comma-separated mint URLs the marketplace may reach over plain HTTP on local addresses |
 | `PUBLIC_URL` (build time) | unset | Absolute site URL for social preview tags, e.g. `https://nft.example.com` |
 | `VITE_MINT_KEYSET_ID` (build time) | unset | Pin the expected mint keyset in the bundle |
+
+## Content filtering
+
+The server screens every image it would publish (new NFTs, received
+transfers and profile pictures) with
+[Marqo's NSFW classifier](https://huggingface.co/Marqo/nsfw-image-detection-384),
+a small Apache-2.0 model that runs on the CPU in about 30 ms per image.
+Refused images are remembered by their hash and a perceptual hash, so
+re-saved, recompressed or resized copies are refused too, for every
+collector.
+
+Export the model to ONNX once, on any machine (this needs PyTorch and timm,
+which the server doesn't):
+
+```bash
+pip install torch timm onnx onnxscript onnxruntime
+python scripts/export_nsfw_model.py nsfw-image-detection-384.onnx
+```
+
+Copy the file to the server and set `NFT_PORTFOLIO_NSFW_MODEL` to its path.
+Without it, only previously refused images are blocked.
+
+The default threshold of 0.8 blocks clearly explicit images. The model
+scores some abstract digital art (smooth skin-toned shapes) as NSFW: in our
+tests it refused about 7% of abstract wallpapers at 0.8 and about 22% at 0.5,
+and no photos of animals, flowers or objects. Lower the threshold to block
+more, at the cost of more refused art.
 
 ## Deploying
 
