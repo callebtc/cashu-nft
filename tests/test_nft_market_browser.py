@@ -401,3 +401,44 @@ async def test_testnut_end_to_end(server):
         bob_after["balance"]["available"]
         == bob_offer["balance"]["available"] + bob_offer["amount"] - bob_fee
     )
+
+
+@pytest.mark.asyncio
+async def test_browser_offer_with_ecash_spent_elsewhere(server):
+    """A stale wallet copy bids with a proof another copy already spent: the
+    funding swap fails, the offer is abandoned with a clear reason, the spent
+    proof is dropped and the unspent input becomes spendable again."""
+    listing = (await server.browser("seller_list", secret=key(), price=90))["listing"]
+    # 100 sat arrive as 64 + 32 + 4; an offer of 96 must use the 64 and the 32.
+    result = await server.browser(
+        "stale_offer",
+        secret=key(),
+        listing_id=listing["id"],
+        topup=100,
+        price=96,
+        spend_elsewhere=64,
+    )
+    assert result["error"] and "spent elsewhere" in result["error"], result
+    assert result["journal"] == [{"stage": "abandoned", "error": result["error"]}]
+    assert result["attention"] == []
+    assert result["balance"]["available"] == 36
+    assert result["balance"]["reserved"] == 0
+    assert result["balance"]["offerLocked"] == 0
+
+
+@pytest.mark.asyncio
+async def test_browser_concurrent_offers_use_separate_ecash(server):
+    listing = (await server.browser("seller_list", secret=key(), price=50))["listing"]
+    result = await server.browser(
+        "concurrent_offers",
+        secret=key(),
+        listing_id=listing["id"],
+        topup=300,
+        prices=[50, 70],
+    )
+    assert result["stages"] == ["registered", "registered"], result
+    assert result["distinctInputs"] and result["attention"] == []
+    locked = sum(result["amounts"])
+    assert result["balance"]["offerLocked"] == locked
+    assert result["balance"]["available"] == 300 - locked
+    assert result["balance"]["reserved"] == 0

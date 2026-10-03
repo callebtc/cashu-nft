@@ -131,6 +131,15 @@ export class MarketCoordinator {
     return (this.config = config);
   }
 
+  /** Offers, acceptances and reconciliation run one at a time: recovery must
+   *  never judge an operation whose request is still in flight. */
+  private queue: Promise<unknown> = Promise.resolve();
+  private exclusive<T>(task: () => Promise<T>): Promise<T> {
+    const run = this.queue.then(task, task);
+    this.queue = run.catch(() => {});
+    return run;
+  }
+
   private wallet(mint: string): Promise<Wallet> { return this.services.walletService.getWallet(mint, 'sat'); }
   /** Funding an offer, or accepting one after review, is the owner's decision
    *  to hold ecash from this mint: make sure Coco tracks it as trusted, or the
@@ -191,7 +200,11 @@ export class MarketCoordinator {
     return { ...quote, amount, fee };
   }
 
-  async makeOffer(listing: Listing, mint: string, opts: { price?: number; lifetime?: number; deadline?: number; created?: number } = {}): Promise<BuyerRecord> {
+  makeOffer(listing: Listing, mint: string, opts: { price?: number; lifetime?: number; deadline?: number; created?: number } = {}): Promise<BuyerRecord> {
+    return this.exclusive(() => this.fundOffer(listing, mint, opts));
+  }
+
+  private async fundOffer(listing: Listing, mint: string, opts: { price?: number; lifetime?: number; deadline?: number; created?: number }): Promise<BuyerRecord> {
     const config = await this.marketConfig();
     const price = opts.price ?? listing.price;
     if (price < listing.price) throw new Error('Offers must meet the asking price');
@@ -217,11 +230,16 @@ export class MarketCoordinator {
     const selected: Proof[] = await this.services.proofService.selectProofsToSend(mint, { amount: quote.amount, unit: 'sat' }, true);
     await this.services.proofService.reserveProofs(mint, selected.map((p) => p.secret), 'market:' + manifest.offer_id);
     let record: BuyerRecord | undefined;
+    let unused = new Set<string>();
     try {
       const preview = await wallet.prepareSwapToSend(quote.amount, selected, { keysetId, includeFees: false }, {
         send: { type: 'lock', options: { mainKeys: [manifest.claim_pubkey], hashlock: manifest.hashlock, locktime: cash_deadline, refundKeys: [manifest.refund_pubkey], sigAll: true }, denominations: amountSplit(quote.amount) },
         keep: { type: 'random' },
       });
+      // Only the swap's inputs stay reserved; selected proofs it doesn't need
+      // go back now (cashu-ts returns them with the change, see below).
+      unused = new Set((preview.unselectedProofs ?? []).map((p) => p.secret));
+      await this.services.proofService.releaseProofs(mint, [...unused]);
       record = {
         kind: 'offer', id: manifest.offer_id, stage: 'intent', mint, keyset_id: keysetId, test_value: quote.test_value, manifest,
         preimage: bytesToHex(preimage), s_new: bytesToHex(integer(s_new)), refund_key: bytesToHex(refundKey),
@@ -231,12 +249,13 @@ export class MarketCoordinator {
       };
       await this.journal.put(record); // (1) intent is durable before the spend
       const result = await wallet.completeSwap(preview);
-      await this.afterFunding(record, result.send, result.keep);
+      // Re-saving the unused proofs could clear a reservation made since.
+      await this.afterFunding(record, result.send, result.keep.filter((p) => !unused.has(p.secret)));
     } catch (error) {
       // Never assume the swap failed: resolve from mint evidence.
       if (!record) { await this.services.proofService.releaseProofs(mint, selected.map((p) => p.secret)); throw error; }
       await this.recoverFunding(record);
-      if (record.stage === 'abandoned') throw error;
+      if (record.stage === 'abandoned') throw record.error ? new Error(record.error) : error;
     }
     await this.signAndRegister(record);
     return record;
@@ -250,26 +269,33 @@ export class MarketCoordinator {
     await this.journal.put(record);
   }
 
-  /** A funding swap with an unknown outcome: inputs still unspent means it
-   *  never happened; spent means restore the exact saved outputs (NUT-09). */
+  /** A funding swap with an unknown outcome, resolved from mint evidence.
+   *  A swap is atomic: its inputs are spent exactly when its outputs are
+   *  signed. So the saved outputs (NUT-09 restore) decide whether it ran;
+   *  spent inputs alone only say that something spent them. */
   private async recoverFunding(record: BuyerRecord) {
     const wallet = await this.wallet(record.mint);
     const states = await wallet.checkProofsStates(record.inputs);
-    if (states.every((s) => s.state === 'UNSPENT')) {
-      await this.services.proofService.releaseProofs(record.mint, record.inputs.map((p) => p.secret));
+    if (states.some((s) => s.state === 'PENDING')) throw new Error('The mint is still processing this offer\'s funding. Try again shortly.');
+    const outputs = [...record.send, ...record.keep];
+    const restored = states.every((s) => s.state === 'UNSPENT')
+      ? { outputs: [], signatures: [] }
+      : await wallet.mint.restore({ outputs: outputs.map(blinded) as never });
+    const byB = new Map(restored.outputs.map((o, i) => [o.B_, restored.signatures[i]]));
+    if (byB.size === 0) {
+      // Never funded. Inputs spent elsewhere (another device, a stale copy of
+      // this wallet) are gone; the rest are spendable again.
+      const spent = record.inputs.filter((_, i) => states[i].state === 'SPENT').map((p) => p.secret);
+      await this.services.proofService.setProofState(record.mint, spent, 'spent');
+      await this.services.proofService.releaseProofs(record.mint, record.inputs.filter((_, i) => states[i].state === 'UNSPENT').map((p) => p.secret));
       record.stage = 'abandoned';
+      if (spent.length) record.error = 'Some of the ecash for this offer had already been spent elsewhere, so the offer was not funded.';
       await this.journal.put(record);
       return;
     }
-    const outputs = [...record.send, ...record.keep];
-    const restored = await wallet.mint.restore({ outputs: outputs.map(blinded) as never });
+    if (outputs.some((o) => !byB.has(o.B_))) throw new Error('The mint restored only part of this offer\'s funding. Contact the mint operator.');
     const keyset = wallet.getKeyset(record.keyset_id);
-    const byB = new Map(restored.outputs.map((o, i) => [o.B_, restored.signatures[i]]));
-    const toProofs = (saved: SavedOutput[]) => verified(wallet, saved.map((o) => {
-      const sig = byB.get(o.B_);
-      if (!sig) throw new Error('The mint did not restore every funding output yet');
-      return outputData(o).toProof(sig, keyset);
-    }));
+    const toProofs = (saved: SavedOutput[]) => verified(wallet, saved.map((o) => outputData(o).toProof(byB.get(o.B_)!, keyset)));
     await this.afterFunding(record, toProofs(record.send), toProofs(record.keep));
   }
 
@@ -323,7 +349,11 @@ export class MarketCoordinator {
     return { ok: reasons.length === 0, reasons: [...new Set(reasons)], test_value: offer.test_value };
   }
 
-  async accept(nft: NftSide, offer: OfferView, card: Card) {
+  accept(nft: NftSide, offer: OfferView, card: Card) {
+    return this.exclusive(() => this.acceptOffer(nft, offer, card));
+  }
+
+  private async acceptOffer(nft: NftSide, offer: OfferView, card: Card) {
     if (offer.role !== 'seller' || offer.disposition !== 'funded') throw new Error('This offer can no longer be accepted');
     const review = await this.review(offer);
     if (!review.ok) throw new Error(review.reasons.join('. '));
@@ -357,7 +387,11 @@ export class MarketCoordinator {
   // --- reconciliation (browser recovery path) -----------------------------------
 
   /** Bring every journaled operation forward from authoritative evidence. */
-  async reconcile(nft?: NftSide): Promise<{ changed: number; attention: string[] }> {
+  reconcile(nft?: NftSide): Promise<{ changed: number; attention: string[] }> {
+    return this.exclusive(() => this.reconcileAll(nft));
+  }
+
+  private async reconcileAll(nft?: NftSide): Promise<{ changed: number; attention: string[] }> {
     let changed = 0;
     const attention: string[] = [];
     for (const record of await this.journal.all()) {
@@ -388,7 +422,12 @@ export class MarketCoordinator {
   }
 
   private async reconcileOffer(record: BuyerRecord, nft?: NftSide) {
-    if (record.stage === 'intent') await this.recoverFunding(record);
+    if (record.stage === 'intent') {
+      // Coco's startup recovery releases reservations it doesn't own; hold
+      // the inputs again until the outcome is known.
+      for (const p of record.inputs) await this.services.proofService.reserveProofs(record.mint, [p.secret], 'market:' + record.id).catch(() => {});
+      await this.recoverFunding(record);
+    }
     if (record.stage === 'funded') await this.signAndRegister(record);
     if (record.stage === 'registered') {
       const offer = await this.api.offer(record.id);

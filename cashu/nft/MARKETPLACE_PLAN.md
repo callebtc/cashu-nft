@@ -1023,3 +1023,35 @@ and `make check` clean.
 - **Unlimited collections.** `NFT_PORTFOLIO_MAX_CARDS` is now opt-in. Unset, a
   collection has no card limit; image storage and JPG size are still capped,
   and unfinished wallet actions per profile stay bounded (100).
+
+## Offer funding and coin reservations (2026-10-03)
+
+A user's wallet kept reporting "The mint did not restore every funding
+output yet" for one offer. Cause and fixes, all in
+`src/market/coordinator.ts`:
+
+- **Funding recovery trusted spent inputs.** When a funding swap failed,
+  any spent input was taken as proof that the swap ran, and the saved outputs
+  were restored. If another copy of the wallet had already spent an input,
+  the mint rejected the swap, nothing could be restored, and the record stayed
+  in `intent` for good (its amount still shown as locked). A swap is atomic,
+  so the saved outputs now decide: none signed means the offer was never
+  funded. Inputs spent elsewhere are marked spent, the rest are released,
+  and the offer is abandoned with a plain reason. Inputs still `PENDING`
+  wait for the next reconcile; a partial restore is reported as such.
+- **Concurrent operations.** Offers, acceptances and reconciliation now run
+  one at a time per wallet. Before, two offers started together could pick
+  the same proofs (the second failed), and a reconcile could judge an offer
+  whose swap was still in flight.
+- **Reservations.** Coco's startup recovery releases every reservation it
+  doesn't own, including `market:<offer id>`. Reconcile reserves an
+  `intent` offer's inputs again before resolving it. Proofs selected but not
+  used as swap inputs are released right after the swap is prepared, and are
+  not re-saved with the change.
+- **Outputs.** Offer, refund and claim outputs are random (never Coco's
+  deterministic counter outputs), so they can't collide with the wallet's own
+  outputs or with each other.
+
+Covered by `test_browser_offer_with_ecash_spent_elsewhere` and
+`test_browser_concurrent_offers_use_separate_ecash`; both fail on the old
+coordinator.

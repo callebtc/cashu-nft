@@ -159,6 +159,45 @@ const phases = {
     }
   },
 
+  /** Another copy of this wallet already spent one of its proofs; this copy
+   *  still lists it as ready and bids with it. */
+  async stale_offer({ secret, listing_id, topup, price, spend_elsewhere }) {
+    await profile(secret, 'Stale');
+    const wallet = await money(secret);
+    await wallet.addMint(MINT);
+    await fund(wallet, topup);
+    const ready = await wallet.repos.proofRepository.getAvailableProofs(MINT, { unit: 'sat' });
+    const stale = ready.find((p) => Number(String(p.amount)) === spend_elsewhere);
+    // Straight to the mint with cashu-ts: Coco's proof store never hears of it.
+    const raw = await wallet.market['services'].walletService.getWallet(MINT, 'sat');
+    await raw.completeSwap(await raw.prepareSwapToSend(spend_elsewhere, [stale], { includeFees: false }, { send: { type: 'random' }, keep: { type: 'random' } }));
+    const listing = await wallet.api.listing(listing_id);
+    let error = null;
+    try { await wallet.market.makeOffer(listing, MINT, { price }); } catch (e) { error = e.message; }
+    const journal = (await wallet.market.journal.all()).map((r) => ({ stage: r.stage, error: r.error ?? null }));
+    const { attention } = await wallet.reconcile();
+    const balance = await balanceOf(wallet);
+    await wallet.dispose();
+    return { error, journal, attention, balance };
+  },
+
+  /** Two offers and a reconciliation started at the same time. */
+  async concurrent_offers({ secret, listing_id, topup, prices }) {
+    await profile(secret, 'Busy');
+    const wallet = await money(secret);
+    await wallet.addMint(MINT);
+    await fund(wallet, topup);
+    const listing = await wallet.api.listing(listing_id);
+    const [records, reconciled] = await Promise.all([
+      Promise.all(prices.map((price) => wallet.market.makeOffer(listing, MINT, { price }))),
+      wallet.reconcile(),
+    ]);
+    const inputs = records.flatMap((r) => r.inputs.map((p) => p.secret));
+    const balance = await balanceOf(wallet);
+    await wallet.dispose();
+    return { stages: records.map((r) => r.stage), amounts: records.map((r) => r.manifest.payment.amount), distinctInputs: new Set(inputs).size === inputs.length, attention: reconciled.attention, balance };
+  },
+
   /** Seller on a new device: recover the NFT vault, review and accept. */
   async seller_accept({ secret, offer_id, expect_fail }) {
     const pubkey = profileKey(secret);
