@@ -12,6 +12,7 @@ import '@fontsource/jetbrains-mono/500.css';
 import './style.css';
 import { newPrivateKey, parseShowing, profileKey, validateKeyset } from './crypto.mjs';
 import { checked, download, getJSON, signedRequest } from './api.mjs';
+import { setTurnstileSitekey } from './turnstile.mjs';
 import { BackButton, Button, CheckRow, SkeletonCards, CopyChip, DrawnCheck, HoldButton, Identicon, Modal, Notice, PreviewArt, StorageNotice, Spinner, StatusBadge,
   Tilt, copyText, date, identiconColor, panel, short, useTint, verdict } from './ui.jsx';
 import HowItWorks from './HowItWorks.jsx';
@@ -509,6 +510,7 @@ function App() {
       const buildPin = import.meta.env.VITE_MINT_KEYSET_ID;
       if ((pinned && pinned !== data.keyset_id) || (buildPin && buildPin !== data.keyset_id)) throw new Error('The mint identity has changed. Restore the original mint before using this app.');
       local.set(MINT_PIN, data.keyset_id);
+      setTurnstileSitekey(data.turnstile_sitekey);
       setConfig(data);
     }).catch((e) => setFatal(e.message));
   }, []);

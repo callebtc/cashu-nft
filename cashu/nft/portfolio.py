@@ -76,6 +76,7 @@ from .portfolio_wallet import (
     PublishRequest,
     WalletProofRequest,
 )
+from .turnstile import configure_turnstile
 from .wallet import SHOW_TOKEN_PREFIX, TOKEN_PREFIX, NFTClient
 
 AUTH_DOMAIN = "Cashu_NFT_Portfolio_Auth_v1"
@@ -444,6 +445,8 @@ def create_portfolio_app(
     run_executor: bool = True,
     nsfw_model: Optional[str] = None,
     nsfw_threshold: float = DEFAULT_THRESHOLD,
+    turnstile_sitekey: Optional[str] = None,
+    turnstile_secret: Optional[str] = None,
 ) -> FastAPI:
     portfolio = Portfolio(
         data_dir,
@@ -462,6 +465,10 @@ def create_portfolio_app(
     # Browsers talk to payment mints directly (wallet balances, funding,
     # verification), so connect-src admits HTTPS/WSS plus configured dev mints.
     connect_src = " ".join(["'self'", "https:", "wss:", *sorted(dev_mints)])
+    # Image uploads carry a Cloudflare Turnstile token when keys are set. Its
+    # script and (invisible) iframe come from challenges.cloudflare.com.
+    turnstile = configure_turnstile(turnstile_sitekey, turnstile_secret)
+    challenges = " https://challenges.cloudflare.com" if turnstile else ""
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -475,6 +482,8 @@ def create_portfolio_app(
         yield
         await executor.stop()
         await market.client.aclose()
+        if turnstile:
+            await turnstile.aclose()
         await portfolio.db.engine.dispose()
 
     app = FastAPI(
@@ -509,7 +518,7 @@ def create_portfolio_app(
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["Referrer-Policy"] = "same-origin"
         response.headers["Content-Security-Policy"] = (
-            f"default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; font-src 'self'; connect-src {connect_src}; worker-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'"
+            f"default-src 'self'; script-src 'self'{challenges}; frame-src 'self'{challenges}; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; font-src 'self'; connect-src {connect_src}; worker-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'"
         )
         response.headers["Permissions-Policy"] = (
             "camera=(), microphone=(), geolocation=()"
@@ -603,6 +612,7 @@ def create_portfolio_app(
             "max_cards": max_cards,
             "wallet_mode": "browser",
             "wallet_version": 2,
+            "turnstile_sitekey": turnstile.sitekey if turnstile else None,
         }
 
     @app.post("/api/auth/challenge")
@@ -862,6 +872,8 @@ def create_portfolio_app(
     ):
         raw = await read_body(request, max_jpg_bytes)
         await authorize(request, pubkey, raw)
+        if turnstile and kind in ("mint", "receive"):
+            await turnstile.verify(request)
         if card_id and kind in ("rotate", "refresh", "migrate"):
             await refuse_if_listed(card_id)
         return await browser_wallet.prepare(
@@ -956,6 +968,8 @@ def create_portfolio_app(
     async def upload_avatar(pubkey: str, request: Request):
         raw = await read_body(request, MAX_AVATAR_BYTES)
         await authorize(request, pubkey, raw)
+        if turnstile:
+            await turnstile.verify(request)
         try:
             jpg = await run_in_threadpool(avatar_jpg, raw)
         except ValueError as error:
@@ -1218,6 +1232,9 @@ def main() -> None:
         nsfw_threshold=float(
             os.environ.get("NFT_PORTFOLIO_NSFW_THRESHOLD", str(DEFAULT_THRESHOLD))
         ),
+        # Cloudflare Turnstile keys; image uploads need a token when set.
+        turnstile_sitekey=os.environ.get("NFT_PORTFOLIO_TURNSTILE_SITEKEY") or None,
+        turnstile_secret=os.environ.get("NFT_PORTFOLIO_TURNSTILE_SECRET") or None,
     )
     # Behind a reverse proxy, trust X-Forwarded-For only from the proxy's
     # address so per-client rate limits see real client IPs.

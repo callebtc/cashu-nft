@@ -95,6 +95,7 @@ backend.
 | `NFT_PORTFOLIO_TRUSTED_PROXY` | unset | Reverse proxy address (e.g. `127.0.0.1`) whose `X-Forwarded-For` is trusted for rate limiting |
 | `NFT_PORTFOLIO_NSFW_MODEL` | unset (classifier off) | Path to the NSFW image classifier (see [Content filtering](#content-filtering)) |
 | `NFT_PORTFOLIO_NSFW_THRESHOLD` | `0.8` | NSFW score at which an upload is refused |
+| `NFT_PORTFOLIO_TURNSTILE_SITEKEY` / `NFT_PORTFOLIO_TURNSTILE_SECRET` | unset (off) | Cloudflare Turnstile keys; image uploads then need a token (see [Content filtering](#content-filtering)) |
 | `NFT_MARKET_DEV_MINTS` | unset | Development only: comma-separated mint URLs the marketplace may reach over plain HTTP on local addresses |
 | `PUBLIC_URL` (build time) | unset | Absolute site URL for social preview tags, e.g. `https://nft.example.com` |
 | `VITE_MINT_KEYSET_ID` (build time) | unset | Pin the expected mint keyset in the bundle |
@@ -125,6 +126,16 @@ scores some abstract digital art (smooth skin-toned shapes) as NSFW: in our
 tests it refused about 7% of abstract wallpapers at 0.8 and about 22% at 0.5,
 and no photos of animals, flowers or objects. Lower the threshold to block
 more, at the cost of more refused art.
+
+Image uploads can also require a
+[Cloudflare Turnstile](https://developers.cloudflare.com/turnstile/) token.
+Create a widget in **invisible** mode for your hostname and set both
+`NFT_PORTFOLIO_TURNSTILE_*` keys. The browser loads Turnstile only when it
+uploads an image, and nothing is shown. The app's Content-Security-Policy
+then allows `https://challenges.cloudflare.com` in `script-src` and
+`frame-src`; a reverse proxy that sets its own policy needs the same. For
+local testing, Cloudflare's dummy keys always pass
+(`1x00000000000000000000BB` with `1x0000000000000000000000000000000AA`).
 
 ## Deploying
 

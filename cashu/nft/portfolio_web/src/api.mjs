@@ -9,7 +9,7 @@ export async function checked(response) {
 }
 export async function getJSON(path) { return (await checked(await fetch(path, { cache: 'no-store' }))).json(); }
 // `origin` is empty in the browser (same-origin); Node tests pass the server URL.
-export async function signedRequest(secret, path, body = new Uint8Array(), contentType = 'application/octet-stream', origin = '') {
+export async function signedRequest(secret, path, body = new Uint8Array(), contentType = 'application/octet-stream', origin = '', headers = {}) {
   const bytes = typeof body === 'string' ? new TextEncoder().encode(body) : body;
   const pubkey = profileKey(secret);
   const challenge = await (await checked(await fetch(origin + '/api/auth/challenge', {
@@ -20,7 +20,7 @@ export async function signedRequest(secret, path, body = new Uint8Array(), conte
   if (challenge.message !== expected) throw new Error('Unexpected signing challenge.');
   return checked(await fetch(origin + path, {
     method: 'POST', body: bytes,
-    headers: { 'Content-Type': contentType, 'X-Portfolio-Challenge': challenge.nonce,
+    headers: { ...headers, 'Content-Type': contentType, 'X-Portfolio-Challenge': challenge.nonce,
       'X-Portfolio-Signature': signMessage(secret, expected) },
   }));
 }

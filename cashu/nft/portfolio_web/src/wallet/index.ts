@@ -7,6 +7,7 @@ import { sha256 } from '@noble/hashes/sha2.js';
 import { bytesToHex, concatBytes } from '@noble/hashes/utils.js';
 import { profileKey, parseShowing } from '../crypto.mjs';
 import { checked, signedRequest } from '../api.mjs';
+import { uploadHeaders } from '../turnstile.mjs';
 import { EncryptedVault, walletSeed, type Envelope } from './vault.ts';
 import { ORDER, utf8, integer, boundPresentation, issueCommitment, finishIssue, finishBlindIssueV2, blindTransfer, finishBlind, hashAsset, nullifier, decodeToken, encodeToken, verifyCredential, publicCard, type MintConfig, type Credential, type Card } from './ps.ts';
 import { splitJpg, transferJpg } from './jpg.ts';
@@ -25,10 +26,10 @@ export class BrowserNFTWallet {
     this.pubkey = profileKey(secret);
     this.base = `/api/profiles/${this.pubkey}/wallet`;
   }
-  private async post(path: string, body: object | Uint8Array = new Uint8Array()) {
+  private async post(path: string, body: object | Uint8Array = new Uint8Array(), headers: Record<string, string> = {}) {
     const binary = body instanceof Uint8Array;
     const bytes = binary ? Uint8Array.from(body as Uint8Array) : utf8(JSON.stringify(body));
-    return (await signedRequest(this.secret, this.base + path, bytes, binary ? 'application/octet-stream' : 'application/json')).json();
+    return (await signedRequest(this.secret, this.base + path, bytes, binary ? 'application/octet-stream' : 'application/json', '', headers)).json();
   }
   private async lock<T>(fn: () => Promise<T>): Promise<T> {
     if (!globalThis.navigator?.locks) throw new Error('This browser needs Web Locks to safely use the NFT wallet');
@@ -45,7 +46,9 @@ export class BrowserNFTWallet {
     if ((await response.json()).states[0]?.state !== 'UNSPENT') throw new Error('This NFT was already transferred or canceled');
   }
   private async prepare(kind: string, bytes: Uint8Array, title: string, cardId?: string): Promise<Prepared> {
-    return this.post(`/prepare?kind=${kind}&title=${encodeURIComponent(title)}${cardId ? '&card_id=' + cardId : ''}${kind === 'mint' ? '&issuance_version=3' : ''}`, bytes);
+    // Image uploads (mint, receive) carry an invisible Turnstile token.
+    const headers = kind === 'mint' || kind === 'receive' ? await uploadHeaders() : {};
+    return this.post(`/prepare?kind=${kind}&title=${encodeURIComponent(title)}${cardId ? '&card_id=' + cardId : ''}${kind === 'mint' ? '&issuance_version=3' : ''}`, bytes, headers);
   }
   async mint(bytes: Uint8Array, title: string): Promise<Card> {
     if (splitJpg(bytes).token) throw new Error('This is a transfer JPG. Use Receive JPG');

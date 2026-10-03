@@ -3,6 +3,7 @@ import { AnimatePresence, motion } from 'motion/react';
 import { toast } from 'sonner';
 import { ArrowDownToLine, Gavel, Heart, Image as ImageIcon, Search, Sparkles, Tag, UserPlus, UserCheck, Users } from 'lucide-react';
 import { getJSON, signedRequest } from './api.mjs';
+import { uploadHeaders } from './turnstile.mjs';
 import { Button, Identicon, Modal, SkeletonCards, SkeletonRows, Spinner, Tilt, identiconColor, setAvatarVersion, useTint } from './ui.jsx';
 
 export const imageUrl = (h) => `/api/images/${h}.jpg`;
@@ -282,7 +283,7 @@ export function EditCollectionDialog({ open, close, profile, identity, onSaved }
     try {
       let updated;
       const base = `/api/profiles/${identity.pubkey}`;
-      if (picture) updated = await (await signedRequest(identity.secret, `${base}/avatar`, picture.bytes, 'image/jpeg')).json();
+      if (picture) updated = await (await signedRequest(identity.secret, `${base}/avatar`, picture.bytes, 'image/jpeg', '', await uploadHeaders())).json();
       else if (removePicture && profile?.avatar) updated = await (await signedRequest(identity.secret, `${base}/avatar/remove`)).json();
       updated = await socialPost(identity, '/settings', { name: name.trim(), cover });
       setAvatarVersion(identity.pubkey, updated.avatar);

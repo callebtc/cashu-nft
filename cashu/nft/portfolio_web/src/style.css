@@ -914,3 +914,5 @@ main.page > .back { margin-bottom: 20px; }
 .sk-amount { height: 72px; width: 220px; border-radius: 14px; }
 .sk-detail-art { max-width: 380px; width: 100%; justify-self: center; }
 @media (prefers-reduced-motion: reduce) { .sk, .sk-wrap { animation: none; } }
+/* Invisible Turnstile widget for uploads: kept in the DOM so it can run, never shown. */
+.turnstile-host { position: fixed; left: 0; top: 0; width: 0; height: 0; overflow: hidden; opacity: 0; pointer-events: none; }

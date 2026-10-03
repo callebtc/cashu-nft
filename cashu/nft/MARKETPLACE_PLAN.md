@@ -955,6 +955,13 @@ and `make check` clean.
 
 ## Product changes (2026-10-02)
 
+- **Turnstile on uploads (2026-10-03).** When
+  `NFT_PORTFOLIO_TURNSTILE_SITEKEY`/`_SECRET` are set, mint and receive
+  preparations and profile-picture uploads need a fresh Cloudflare Turnstile
+  token in `X-Turnstile-Token`, checked with siteverify after the request
+  signature (403 if invalid, 503 if Cloudflare can't be reached). The browser
+  renders an invisible widget off-screen only at upload time. Cloudflare's
+  scripts are otherwise never loaded.
 - **Content filtering (2026-10-03).** New NFTs, received transfer JPGs and
   profile pictures are scored by Marqo's nsfw-image-detection-384 (ONNX,
   CPU) before the server stores them. A score of 0.8 or more refuses the
