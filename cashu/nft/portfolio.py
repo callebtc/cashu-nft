@@ -51,6 +51,11 @@ from .portfolio_og import (
     fan,
     link_meta,
     link_version,
+    listing_meta,
+    listing_version,
+    nft_meta,
+    nft_version,
+    owned_count,
     profile_version,
     site_base,
     with_meta,
@@ -59,8 +64,12 @@ from .portfolio_og_image import (
     Card,
     CollectionPreview,
     LinkPreview,
+    ListingPreview,
+    NFTPreview,
     collection_image,
     link_image,
+    listing_image,
+    nft_image,
 )
 from .portfolio_social import (
     CollectionSort,
@@ -1074,18 +1083,16 @@ def create_portfolio_app(
             },
         )
 
-    @app.get("/api/og/p/{pubkey}.jpg")
+    @app.api_route("/api/og/p/{pubkey}.jpg", methods=["GET", "HEAD"])
     async def og_collection(pubkey: str, request: Request, v: str = ""):
         profile = await get_profile(pubkey)
         avatar = await avatar_row(pubkey) if profile["avatar"] else None
-        cards = [
-            Card(c["title"] or "", await stored_jpg(c["h"])) for c in fan(profile)
-        ]
+        cards = [Card(c["title"] or "", await stored_jpg(c["h"])) for c in fan(profile)]
         preview = CollectionPreview(
             pubkey=pubkey,
             name=profile["name"] or "",
             avatar=avatar["jpg"] if avatar else None,
-            nfts=sum(c["status"] == "owned" for c in profile["cards"]),
+            nfts=owned_count(profile),
             followers=profile["followers"],
             likes=profile["likes"],
             cards=cards,
@@ -1098,7 +1105,7 @@ def create_portfolio_app(
             lambda: collection_image(preview, host),
         )
 
-    @app.get("/api/og/claim/{link_id}.jpg")
+    @app.api_route("/api/og/claim/{link_id}.jpg", methods=["GET", "HEAD"])
     async def og_link(link_id: str, request: Request, v: str = ""):
         link = await get_link(link_id)
         avatar = await avatar_row(link["sender"])
@@ -1115,6 +1122,53 @@ def create_portfolio_app(
             link_version(link, avatar["updated"] if avatar else None),
             v,
             lambda: link_image(preview, host),
+        )
+
+    @app.api_route("/api/og/p/{pubkey}/{card_id}.jpg", methods=["GET", "HEAD"])
+    async def og_nft(pubkey: str, card_id: str, request: Request, v: str = ""):
+        profile = await get_profile(pubkey)
+        card = next((c for c in profile["cards"] if c["id"] == card_id), None)
+        if card is None:
+            raise HTTPException(404, "NFT not found.")
+        avatar = await avatar_row(pubkey) if profile["avatar"] else None
+        preview = NFTPreview(
+            pubkey=pubkey,
+            name=profile["name"] or "",
+            avatar=avatar["jpg"] if avatar else None,
+            card=Card(card["title"] or "", await stored_jpg(card["h"])),
+            nfts=owned_count(profile),
+            sent=card["status"] == "sent",
+        )
+        host = og_host(request)
+        return await og_jpg(
+            f"nft/{card_id}/",
+            nft_version(profile, card),
+            v,
+            lambda: nft_image(preview, host),
+        )
+
+    @app.api_route("/api/og/market/{listing_id}.jpg", methods=["GET", "HEAD"])
+    async def og_listing(listing_id: str, request: Request, v: str = ""):
+        if not re.fullmatch(r"[0-9a-f]{32}", listing_id):
+            raise HTTPException(404, "Listing not found.")
+        listing = await market.listing(listing_id)
+        avatar = await avatar_row(listing["seller"])
+        preview = ListingPreview(
+            seller=listing["seller"],
+            seller_name=listing["seller_name"] or "",
+            avatar=avatar["jpg"] if avatar else None,
+            card=Card(listing["title"] or "", await stored_jpg(listing["h"])),
+            price=listing["price"],
+            state=listing["state"],
+            bids=listing["bids"]["count"],
+            top_bid=listing["bids"]["top"],
+        )
+        host = og_host(request)
+        return await og_jpg(
+            f"market/{listing_id}/",
+            listing_version(listing, avatar["updated"] if avatar else None),
+            v,
+            lambda: listing_image(preview, host),
         )
 
     # Retain bearer-redemption compatibility, but do not expose unauthenticated
@@ -1142,14 +1196,14 @@ def create_portfolio_app(
             "/assets", StaticFiles(directory=str(WEB_DIR / "assets")), name="assets"
         )
 
-    @app.get("/")
-    @app.get("/how-it-works")
-    @app.get("/market")
-    @app.get("/wallet")
-    @app.get("/offers")
-    @app.get("/explore")
-    @app.get("/explore/nfts")
-    @app.get("/activity")
+    @app.api_route("/", methods=["GET", "HEAD"])
+    @app.api_route("/how-it-works", methods=["GET", "HEAD"])
+    @app.api_route("/market", methods=["GET", "HEAD"])
+    @app.api_route("/wallet", methods=["GET", "HEAD"])
+    @app.api_route("/offers", methods=["GET", "HEAD"])
+    @app.api_route("/explore", methods=["GET", "HEAD"])
+    @app.api_route("/explore/nfts", methods=["GET", "HEAD"])
+    @app.api_route("/activity", methods=["GET", "HEAD"])
     async def frontend():
         if not (WEB_DIR / "index.html").exists():
             return JSONResponse(
@@ -1170,8 +1224,8 @@ def create_portfolio_app(
             html, media_type="text/html", headers={"Cache-Control": "no-cache"}
         )
 
-    @app.get("/p/{pubkey}")
-    async def profile_page(pubkey: str):
+    @app.api_route("/p/{pubkey}", methods=["GET", "HEAD"])
+    async def profile_page(pubkey: str, nft: Optional[str] = None):
         validate_pubkey(pubkey)
         if not (WEB_DIR / "index.html").exists():
             return await frontend()
@@ -1179,15 +1233,28 @@ def create_portfolio_app(
             profile = await get_profile(pubkey)
         except HTTPException:
             return await frontend()
+        # /p/<pubkey>?nft=<card> opens that NFT, so its preview shows the NFT.
+        card = next((c for c in profile["cards"] if c["id"] == nft), None)
+        if card is not None:
+            version = nft_version(profile, card)
+            return page_with_meta(lambda base: nft_meta(base, profile, card, version))
         return page_with_meta(lambda base: collection_meta(base, profile))
 
-    @app.get("/market/{listing_id}")
+    @app.api_route("/market/{listing_id}", methods=["GET", "HEAD"])
     async def market_page(listing_id: str):
         if not re.fullmatch(r"[0-9a-f]{32}", listing_id):
             raise HTTPException(404, "Listing not found.")
-        return await frontend()
+        if not (WEB_DIR / "index.html").exists():
+            return await frontend()
+        try:
+            listing = await market.listing(listing_id)
+        except HTTPException:
+            return await frontend()
+        avatar = await avatar_row(listing["seller"])
+        version = listing_version(listing, avatar["updated"] if avatar else None)
+        return page_with_meta(lambda base: listing_meta(base, listing, version))
 
-    @app.get("/claim/{link_id}")
+    @app.api_route("/claim/{link_id}", methods=["GET", "HEAD"])
     async def claim_page(link_id: str):
         if not re.fullmatch(r"[0-9a-f]{32}", link_id):
             raise HTTPException(404, "This link doesn't exist.")

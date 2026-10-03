@@ -1068,3 +1068,19 @@ def test_collection_preview_image(client):
     current = client.get(f"/api/og/p/{alice.pubkey}.jpg?v={version}")
     assert current.content == stale.content  # served from the render cache
     assert "immutable" in current.headers["cache-control"]
+
+
+def test_nft_and_listing_preview_routes(client):
+    alice = Profile(client)
+    alice.create("Ana")
+    card = minted_card(alice, make_jpg(color=(200, 120, 30)))
+    resp = client.get(f"/api/og/p/{alice.pubkey}/{card['id']}.jpg")
+    assert resp.status_code == 200, resp.text
+    with Image.open(io.BytesIO(resp.content)) as image:
+        assert (image.format, image.size) == ("JPEG", (1200, 630))
+    assert client.get(f"/api/og/p/{alice.pubkey}/{'0' * 32}.jpg").status_code == 404
+    assert client.get(f"/api/og/market/{'0' * 32}.jpg").status_code == 404
+    assert client.get("/api/og/market/nope.jpg").status_code == 404
+    # Link checkers may probe pages with HEAD.
+    for path in (f"/p/{alice.pubkey}?nft={card['id']}", f"/market/{'0' * 32}", "/"):
+        assert client.head(path).status_code != 405

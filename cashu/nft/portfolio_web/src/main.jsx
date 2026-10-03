@@ -492,10 +492,17 @@ function App() {
     document.title = titles[route.page] ? `${titles[route.page]} · Cashu NFT` : profile?.name ? `${profile.name} · Cashu NFT` : 'Cashu NFT · The NFT is the JPG';
   }, [route, profile?.name]);
   useEffect(() => {
-    if (!route.nft || !profile?.cards.some((c) => c.id === route.nft)) return;
-    setSelected(route.nft); setTab(profile.cards.find((c) => c.id === route.nft).status === 'sent' ? 'sent' : 'collection');
-    window.history.replaceState({}, '', `/p/${route.pubkey}`); setRoute((r) => ({ ...r, nft: null }));
+    if (!route.nft || !profile) return;
+    const target = profile.cards.find((c) => c.id === route.nft);
+    if (target) { setSelected(target.id); setTab(target.status === 'sent' ? 'sent' : 'collection'); }
+    setRoute((r) => ({ ...r, nft: null }));
   }, [route.nft, route.pubkey, profile]);
+  // The address follows the open NFT, so a copied or shared link opens it (with its own preview).
+  useEffect(() => {
+    if (route.page !== 'profile' || !profile || route.nft) return;
+    const path = selected ? `/p/${route.pubkey}?nft=${selected}` : `/p/${route.pubkey}`;
+    if (window.location.pathname + window.location.search !== path) window.history.replaceState({}, '', path);
+  }, [selected, route.page, route.pubkey, route.nft, profile]);
   useEffect(() => {
     if (route.page !== 'home') return;
     let live = true;

@@ -1,7 +1,7 @@
 """Per-page social previews (OpenGraph / Twitter cards).
 
-Crawlers don't run JavaScript, so collection and transfer-link pages get
-their meta tags filled in on the server. Only data that the public API
+Crawlers don't run JavaScript, so collection, NFT, listing and transfer-link
+pages get their meta tags filled in on the server. Only data that the public API
 already returns for that page is used.
 """
 
@@ -92,6 +92,63 @@ def link_meta(base: str, link: dict, version: str) -> Dict[str, str]:
     )
 
 
+def sats(n: int) -> str:
+    """Like the web app's sats(): '1 sat', '1,234 sats'."""
+    return f"{n:,} sat" + ("" if n == 1 else "s")
+
+
+def owned_count(profile: dict) -> int:
+    return sum(c["status"] == "owned" for c in profile["cards"])
+
+
+def nft_meta(base: str, profile: dict, card: dict, version: str) -> Dict[str, str]:
+    name = profile.get("name") or "A collection"
+    title = card.get("title") or "Untitled"
+    if card["status"] == "owned":
+        n = owned_count(profile)
+        description = f"One of {n} NFT{'' if n == 1 else 's'} in {name} on Cashu NFT."
+    else:
+        description = f"Sent on from {name} on Cashu NFT."
+    return page_meta(
+        base,
+        f"/p/{profile['pubkey']}?nft={card['id']}",
+        f"{title} · {name}",
+        description,
+        f"/api/og/p/{profile['pubkey']}/{card['id']}.jpg?v={version}",
+        f"{title}, an NFT in {name} on Cashu NFT.",
+    )
+
+
+def listing_open(listing: dict) -> bool:
+    return listing["state"] in ("active", "reserved")
+
+
+def listing_meta(base: str, listing: dict, version: str) -> Dict[str, str]:
+    seller = listing.get("seller_name") or "Someone"
+    title = listing.get("title") or "An NFT"
+    price = sats(listing["price"])
+    bids = listing["bids"]["count"]
+    if listing_open(listing):
+        headline = f"{title} · {price}"
+        description = f"For sale by {seller} on Cashu NFT. Pay with Cashu ecash." + (
+            f" {bids} bid{'' if bids == 1 else 's'} so far." if bids else ""
+        )
+    elif listing["state"] == "sold":
+        headline = f"{title} · sold"
+        description = f"Sold by {seller} for {price} on Cashu NFT."
+    else:
+        headline = title
+        description = f"Listed by {seller} on Cashu NFT. No longer for sale."
+    return page_meta(
+        base,
+        f"/market/{listing['id']}",
+        headline,
+        description,
+        f"/api/og/market/{listing['id']}.jpg?v={version}",
+        f"{title}, listed by {seller} on Cashu NFT.",
+    )
+
+
 def fan(profile: dict) -> List[dict]:
     """The NFTs on the collection preview: the cover first, then the newest."""
     cards = [c for c in profile["cards"] if c["status"] == "owned"]
@@ -108,7 +165,7 @@ def profile_version(profile: dict) -> str:
     return _digest(
         profile.get("name"),
         profile.get("avatar"),
-        sum(c["status"] == "owned" for c in profile["cards"]),
+        owned_count(profile),
         profile.get("followers"),
         profile.get("likes"),
         [c["id"] for c in fan(profile)],
@@ -118,3 +175,28 @@ def profile_version(profile: dict) -> str:
 def link_version(link: dict, avatar: Optional[int]) -> str:
     """Changes when anything drawn on the transfer-link preview changes."""
     return _digest(link["status"], link.get("sender_name"), avatar)
+
+
+def nft_version(profile: dict, card: dict) -> str:
+    """Changes when anything drawn on an NFT's preview changes."""
+    return _digest(
+        profile.get("name"),
+        profile.get("avatar"),
+        owned_count(profile),
+        card["id"],
+        card.get("title"),
+        card["status"],
+    )
+
+
+def listing_version(listing: dict, avatar: Optional[int]) -> str:
+    """Changes when anything drawn on a listing's preview changes."""
+    return _digest(
+        listing["state"],
+        listing["price"],
+        listing["bids"]["count"],
+        listing["bids"]["top"],
+        listing.get("seller_name"),
+        listing.get("title"),
+        avatar,
+    )

@@ -1,4 +1,5 @@
-"""Social preview images (1200×630 JPG) for collection and transfer-link pages.
+"""Social preview images (1200×630 JPG) for collection, NFT, listing and
+transfer-link pages.
 
 Drawn with Pillow in the app's look on its dark theme: a framed board, ink
 borders, hard offset shadows, tilted cards and stickers, Bricolage headlines
@@ -14,6 +15,8 @@ from pathlib import Path
 from typing import List, Optional, Sequence, Tuple
 
 from PIL import Image, ImageDraw, ImageFont, ImageOps, UnidentifiedImageError
+
+from .portfolio_og import sats
 
 FONTS = Path(__file__).parent / "fonts"
 SUBSETS = ("latin", "latin-ext")
@@ -557,4 +560,127 @@ def link_image(preview: LinkPreview, host: str) -> bytes:
     else:
         sticker = _sticker("For you", PINK)
         _place(canvas, sticker, stage + 70, FY + 70, -8)
+    return _jpg(canvas)
+
+
+def _byline(
+    canvas: Image.Image, pubkey: str, avatar: Optional[bytes], text: str
+) -> None:
+    """A small avatar and a line of text under the pill."""
+    _avatar(canvas, FX + 60, FY + 130, 48, 14, pubkey, avatar, 3)
+    style = Style(SANS, 28, 650)
+    _text(
+        ImageDraw.Draw(canvas),
+        FX + 60 + 48 + 18,
+        FY + 130 + 34,
+        _ellipsize(text, style, 490),
+        style,
+        INK,
+    )
+
+
+@dataclass(frozen=True)
+class NFTPreview:
+    pubkey: str
+    name: str  # the collection's
+    avatar: Optional[bytes]
+    card: Card
+    nfts: int  # NFTs the collection holds
+    sent: bool  # the NFT has left this collection
+
+
+def nft_image(preview: NFTPreview, host: str) -> bytes:
+    canvas = _frame()
+    draw = ImageDraw.Draw(canvas)
+    _pill(
+        draw,
+        FX + 60,
+        FY + 56,
+        "Sent on" if preview.sent else "NFT",
+        STONE if preview.sent else LIME,
+        19,
+        40,
+    )
+    name = _clean(preview.name, Style(SANS, 28, 650)) or "A collection"
+    _byline(canvas, preview.pubkey, preview.avatar, name)
+    title = _clean(preview.card.title, Style(DISPLAY, 96, 800)) or "Untitled"
+    bottom = _headline(canvas, title, FY + 212, 560, range(96, 47, -4))
+    _lead(
+        canvas,
+        "It has moved on to a new collection."
+        if preview.sent
+        else f"One of {_plural(preview.nfts, 'NFT')} in this collection.",
+        bottom + 20,
+    )
+    _brand(canvas, host)
+
+    stage = FX + FW - 18 - 470
+    _place(canvas, _card(preview.card, 350, "1 of 1", False), stage + 245, FY + 290, -4)
+    return _jpg(canvas)
+
+
+@dataclass(frozen=True)
+class ListingPreview:
+    seller: str
+    seller_name: str
+    avatar: Optional[bytes]
+    card: Card
+    price: int
+    state: str  # "active", "reserved", "sold", "unlisted" or "stale"
+    bids: int
+    top_bid: Optional[int]
+
+
+def listing_image(preview: ListingPreview, host: str) -> bytes:
+    canvas = _frame()
+    draw = ImageDraw.Draw(canvas)
+    listed = preview.state in ("active", "reserved")
+    sold = preview.state == "sold"
+    if preview.state == "active":
+        label, fill = "For sale", LIME
+    elif preview.state == "reserved":
+        label, fill = "Sale pending", YELLOW
+    else:
+        label, fill = ("Sold" if sold else "Not for sale"), STONE
+    _pill(draw, FX + 60, FY + 56, label, fill, 19, 40)
+    seller = _clean(preview.seller_name, Style(SANS, 28, 650)) or "Someone"
+    _byline(
+        canvas,
+        preview.seller,
+        preview.avatar,
+        f"{seller} is selling"
+        if listed
+        else f"Sold by {seller}"
+        if sold
+        else f"Listed by {seller}",
+    )
+    title = _clean(preview.card.title, Style(DISPLAY, 96, 800)) or "an NFT"
+    bottom = _headline(canvas, title, FY + 212, 560, range(96, 47, -4))
+    if sold:
+        lead = f"Sold for {sats(preview.price)}."
+    elif not listed:
+        lead = "This NFT is no longer for sale."
+    elif preview.state == "reserved":
+        lead = "An offer was accepted."
+    elif preview.bids:
+        lead = f"{_plural(preview.bids, 'bid')} so far, top bid {sats(preview.top_bid or 0)}."
+    else:
+        lead = "Pay with Cashu ecash from any mint."
+    _lead(canvas, lead, bottom + 20)
+    _brand(canvas, host)
+
+    stage = FX + FW - 18 - 470
+    _place(
+        canvas,
+        _card(preview.card, 350, "1 of 1", not listed),
+        stage + 245,
+        FY + 290,
+        -4,
+    )
+    if listed:
+        price = _sticker(sats(preview.price), YELLOW, 34)
+        _place(canvas, price, stage + 40 + price.width / S / 2, FY + 78, -8)
+    else:
+        stamp = _sticker("Sold" if sold else "Unlisted", ORANGE, 44)
+        _place(canvas, stamp, stage + 245, FY + 250, -12)
     return _jpg(canvas)
