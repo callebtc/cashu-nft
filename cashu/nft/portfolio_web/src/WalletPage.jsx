@@ -8,6 +8,7 @@ import { ArrowDownToLine, ArrowLeft, ArrowUpFromLine, ClipboardPaste, Coins, Ext
 import { getJSON } from './api.mjs';
 import { Button, CopyChip, DrawnCheck, HoldButton, Modal, Notice, SkeletonRows, StorageNotice, Spinner, panel } from './ui.jsx';
 import { Segmented, imageUrl } from './social.jsx';
+import { UR_FRAME_MS, needsAnimatedQr, urFrames } from './qr.mjs';
 import { TestBadge, host, sats } from './market.jsx';
 
 const TONES = ['var(--lime)', 'var(--orange)', 'var(--blue)', 'var(--pink)', 'var(--yellow)', 'var(--mint)'];
@@ -38,15 +39,41 @@ function MintMark({ url, size = 40 }) {
   return <span className="mint-mark" style={{ '--tone': toneOf(url), width: size, height: size, fontSize: size * 0.42 }} aria-hidden="true">{label}</span>;
 }
 
-function Qr({ value, label }) {
-  const [svg, setSvg] = useState('');
+function Qr({ value, label, onTooLarge }) {
+  const [svg, setSvg] = useState(''), [failed, setFailed] = useState(false);
   useEffect(() => {
     let live = true;
+    setFailed(false);
     QRCode.toString(value.toUpperCase().startsWith('LNBC') ? value.toUpperCase() : value, { type: 'svg', margin: 1, errorCorrectionLevel: 'M' })
-      .then((s) => { if (live) setSvg(s); }).catch(() => setSvg(''));
+      .then((s) => { if (live) setSvg(s); })
+      .catch(() => { if (live) { setSvg(''); setFailed(true); onTooLarge?.(); } });
     return () => { live = false; };
+  }, [value]); // eslint-disable-line react-hooks/exhaustive-deps
+  return <div className="qr" role="img" aria-label={label}>
+    {svg ? <div dangerouslySetInnerHTML={{ __html: svg }} /> : failed ? <p className="hint">Too large for a QR code. Copy it instead.</p> : <Spinner />}
+  </div>;
+}
+
+/** Cycles through UR parts of a token (NUT-16 animated QR code). */
+function AnimatedQr({ value, label }) {
+  const [frame, setFrame] = useState('');
+  useEffect(() => {
+    const next = urFrames(value);
+    setFrame(next());
+    const timer = setInterval(() => setFrame(next()), UR_FRAME_MS);
+    return () => clearInterval(timer);
   }, [value]);
-  return <div className="qr" role="img" aria-label={label}>{svg ? <div dangerouslySetInnerHTML={{ __html: svg }} /> : <Spinner />}</div>;
+  return frame ? <Qr value={frame} label={label} /> : <div className="qr"><Spinner /></div>;
+}
+
+/** Static QR code for small tokens, animated one for larger tokens or any that
+ *  do not fit a single code. */
+function TokenQr({ token }) {
+  const [tooLarge, setTooLarge] = useState(false);
+  const animated = useMemo(() => needsAnimatedQr(token), [token]);
+  useEffect(() => setTooLarge(false), [token]);
+  return animated || tooLarge ? <AnimatedQr value={token} label="Animated ecash token QR code" />
+    : <Qr value={token} label="Ecash token QR code" onTooLarge={() => setTooLarge(true)} />;
 }
 
 function AmountField({ value, onChange, max, autoFocus }) {
@@ -176,7 +203,7 @@ function SendDialog({ open, close, money, balances, initialMint, nameOf, onSent 
     {done ? <Done title="Invoice paid" detail={`${sats(qAmount)} sent over Lightning.`}><Button variant="primary" className="full" onClick={close}>Done</Button></Done>
       : token ? <motion.div className="stack invoice-view" {...panel}>
         <div className="invoice-amount"><strong>{sats(Number(amount))}</strong><span className="muted">{nameOf(mint)}</span></div>
-        <Qr value={token} label="Ecash token QR code" />
+        <TokenQr token={token} />
         <div className="row invoice-actions"><CopyChip value={token} display="Copy token" message="Token copied" /></div>
         <p className="hint">Anyone with this token can claim it. Share it only with the recipient.</p>
         <Button variant="secondary" className="full" onClick={close}>Done</Button>
