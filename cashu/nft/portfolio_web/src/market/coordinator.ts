@@ -169,7 +169,7 @@ export class MarketCoordinator {
 
   async list(nft: NftSide, card: Card, price: number): Promise<Listing> {
     const config = await this.marketConfig();
-    // Listing rotates the credential first: earlier JPG exports and links die.
+    // Listing rotates the credential first: earlier file exports and links die.
     const fresh = await nft.rotate(card);
     const listingId = randomHex(16);
     const shown = parseShowing(fresh.showing);

@@ -1,4 +1,4 @@
-"""Public JPG portfolios with encrypted browser-wallet recovery backups.
+"""Public image portfolios with encrypted browser-wallet recovery backups.
 
 Build portfolio_web first, then: poetry run python -m cashu.nft.portfolio
 The ledger, images and collection changes share a single SQLite transaction.
@@ -43,7 +43,13 @@ from .ledger import AlreadyMintedError, AlreadySpentError, NFTError, PSLedger
 from .market import Executor, Market, market_router
 from .market_net import MintNetPolicy
 from .moderation import DEFAULT_THRESHOLD, Classifier, Moderation, NSFWClassifier
-from .portfolio_jpg import avatar_jpg, normalize_jpg, split_transfer_jpg, validate_jpg
+from .portfolio_image import (
+    avatar_jpg,
+    image_format,
+    normalize_image,
+    split_transfer,
+    validate_image,
+)
 from .portfolio_links import LinkRequest, Links
 from .portfolio_og import (
     collection_meta,
@@ -172,7 +178,7 @@ class Portfolio:
     def __init__(
         self,
         data_dir: str,
-        max_jpg_bytes: int = 10 * 1024 * 1024,
+        max_image_bytes: int = 10 * 1024 * 1024,
         max_cards: Optional[int] = None,
         max_storage_bytes: int = 1024**3,
         classifier: Optional[Classifier] = None,
@@ -182,7 +188,7 @@ class Portfolio:
         directory.mkdir(parents=True, exist_ok=True, mode=0o700)
         self.db = Database("portfolio", str(directory))
         self.ledger = PSLedger(self.db, load_mint_key(directory))
-        self.max_jpg_bytes = max_jpg_bytes
+        self.max_image_bytes = max_image_bytes
         self.max_cards = max_cards
         self.max_storage_bytes = max_storage_bytes
         self.moderation = Moderation(self.db, classifier, nsfw_threshold)
@@ -235,7 +241,7 @@ class Portfolio:
     @staticmethod
     def public_card(row: dict, owner: bool = True) -> dict:
         # Deliberately whitelist fields: never serialize a credential or owner secret.
-        # A pending transfer ('ready': a transfer JPG or link exists) is the
+        # A pending transfer ('ready': a transfer file or link exists) is the
         # owner's business; public views show such a card as plainly owned.
         public = {
             key: row[key]
@@ -284,10 +290,10 @@ class Portfolio:
         return row
 
     async def mint(self, pubkey: str, data: bytes, title: str) -> dict:
-        jpg = await run_in_threadpool(normalize_jpg, data)
-        if len(jpg) > self.max_jpg_bytes:
+        jpg = await run_in_threadpool(normalize_image, data)
+        if len(jpg) > self.max_image_bytes:
             raise HTTPException(
-                413, "The normalized JPG is too large. Use a smaller image."
+                413, "The normalized image is too large. Use a smaller image."
             )
         await self.moderation.check(pubkey, jpg)
         h = hash_asset(jpg)
@@ -297,7 +303,7 @@ class Portfolio:
             await self.capacity(conn, pubkey, len(jpg))
             begin = await self.ledger.issue_nft_begin(conn=conn)
             # This server is still the custodial wallet. Its call into the
-            # ledger uses a hidden scalar, but the uploaded JPG is public.
+            # ledger uses a hidden scalar, but the uploaded image is public.
             base = PublicKey(compressed=bytes.fromhex(begin["u"]), group="G1")
             tag, B, t, blind_proof = blind_issue_commit(
                 self.ledger.keyset, h, secret, base, bytes.fromhex(begin["session"])
@@ -312,18 +318,18 @@ class Portfolio:
             return await self.store_card(conn, pubkey, cred, jpg, title)
 
     async def receive(self, pubkey: str, data: bytes, title: str) -> dict:
-        jpg, token = split_transfer_jpg(data)
-        await run_in_threadpool(validate_jpg, jpg)
+        jpg, token = split_transfer(data)
+        await run_in_threadpool(validate_image, jpg)
         if token is None:
             raise HTTPException(
                 400,
-                "This JPG has no transfer token. Ask for the original transfer JPG.",
+                "This file has no transfer token. Ask for the original transfer file.",
             )
         old = NFTClient.decode_token(token)
         if old.h != hash_asset(jpg):
             raise HTTPException(
                 400,
-                "The embedded token does not belong to this JPG. Nothing was redeemed.",
+                "The embedded token does not belong to this picture. Nothing was redeemed.",
             )
         await self.moderation.check(pubkey, jpg)
         if old.keyset_id != self.ledger.keyset.keyset_id:
@@ -413,7 +419,7 @@ class Portfolio:
                 "SELECT jpg FROM portfolio_images WHERE h=:h", {"h": row["h"]}
             )
             if image is None:
-                raise HTTPException(404, "The JPG is unavailable.")
+                raise HTTPException(404, "The image is unavailable.")
             cred = Credential.from_bytes(bytes(row["credential"]))
             jpg = embed_token(bytes(image["jpg"]), TOKEN_PREFIX + cred.to_bytes().hex())
             await conn.execute(
@@ -461,7 +467,7 @@ class Portfolio:
 def create_portfolio_app(
     data_dir: str,
     *,
-    max_jpg_bytes: int = 10 * 1024 * 1024,
+    max_image_bytes: int = 10 * 1024 * 1024,
     max_cards: Optional[int] = None,
     max_storage_bytes: int = 1024**3,
     market_dev_mints: Optional[List[str]] = None,
@@ -474,7 +480,7 @@ def create_portfolio_app(
 ) -> FastAPI:
     portfolio = Portfolio(
         data_dir,
-        max_jpg_bytes,
+        max_image_bytes,
         max_cards,
         max_storage_bytes,
         NSFWClassifier(nsfw_model) if nsfw_model else None,
@@ -559,7 +565,7 @@ def create_portfolio_app(
     @app.exception_handler(AlreadyMintedError)
     async def duplicate(request: Request, error: AlreadyMintedError):
         return JSONResponse(
-            {"detail": "Already minted. Upload its transfer JPG to receive it."},
+            {"detail": "Already minted. Upload its transfer file to receive it."},
             status_code=409,
         )
 
@@ -632,7 +638,9 @@ def create_portfolio_app(
         return {
             "keyset_id": portfolio.ledger.keyset.keyset_id,
             "public_key": portfolio.ledger.keyset.to_bytes().hex(),
-            "max_jpg_bytes": max_jpg_bytes,
+            "max_image_bytes": max_image_bytes,
+            # The previous web app reads this name.
+            "max_jpg_bytes": max_image_bytes,
             "max_cards": max_cards,
             "wallet_mode": "browser",
             "wallet_version": 2,
@@ -828,22 +836,22 @@ def create_portfolio_app(
     async def mint(
         pubkey: str,
         request: Request,
-        title: str = Query(default="Untitled JPG", min_length=1, max_length=80),
+        title: str = Query(default="Untitled", min_length=1, max_length=80),
     ):
-        raw = await read_body(request, max_jpg_bytes)
+        raw = await read_body(request, max_image_bytes)
         await authorize(request, pubkey, raw)
-        raise HTTPException(410, "Mint JPGs with the browser wallet.")
+        raise HTTPException(410, "Mint with the browser wallet.")
 
     @app.post("/api/profiles/{pubkey}/receive")
     async def receive(
         pubkey: str,
         request: Request,
-        title: str = Query(default="Collected JPG", min_length=1, max_length=80),
+        title: str = Query(default="Received", min_length=1, max_length=80),
     ):
-        raw = await read_body(request, max_jpg_bytes + 65536)
+        raw = await read_body(request, max_image_bytes + 65536)
         await authorize(request, pubkey, raw)
         raise HTTPException(
-            410, "Receive transfer JPGs locally with the browser wallet."
+            410, "Receive transfer files locally with the browser wallet."
         )
 
     @app.post("/api/profiles/{pubkey}/cards/{card_id}/claim")
@@ -886,7 +894,7 @@ def create_portfolio_app(
         raw = await read_body(request, 0)
         await authorize(request, pubkey, raw)
         raise HTTPException(
-            410, "Generate transfer JPGs locally with the browser wallet."
+            410, "Generate transfer files locally with the browser wallet."
         )
 
     @app.post("/api/profiles/{pubkey}/cards/{card_id}/cancel")
@@ -902,11 +910,11 @@ def create_portfolio_app(
         pubkey: str,
         request: Request,
         kind: Literal["mint", "receive", "rotate", "refresh", "migrate"] = Query(),
-        title: str = Query(default="Untitled JPG", min_length=1, max_length=80),
+        title: str = Query(default="Untitled", min_length=1, max_length=80),
         card_id: Optional[str] = Query(default=None),
         issuance_version: Literal["1", "2", "3"] = Query(default="1"),
     ):
-        raw = await read_body(request, max_jpg_bytes)
+        raw = await read_body(request, max_image_bytes)
         await authorize(request, pubkey, raw)
         if turnstile and kind in ("mint", "receive"):
             await turnstile.verify(request)
@@ -996,7 +1004,7 @@ def create_portfolio_app(
 
     @app.post("/api/profiles/{pubkey}/cards/pending")
     async def pending_cards(pubkey: str, request: Request):
-        # Owner-only: which cards have an outstanding transfer JPG or link.
+        # Owner-only: which cards have an outstanding transfer file or link.
         await authorize(request, pubkey, await read_body(request, 0))
         return {"ids": await portfolio.pending_cards(pubkey)}
 
@@ -1056,8 +1064,11 @@ def create_portfolio_app(
             headers={"Cache-Control": "public, max-age=31536000, immutable"},
         )
 
-    @app.get("/api/images/{h}.jpg")
-    async def image(h: str):
+    # /api/images/<h>, or with any extension: links from when every image was
+    # a JPG end in .jpg. The stored bytes decide the Content-Type.
+    @app.get("/api/images/{name}")
+    async def image(name: str):
+        h = name.split(".", 1)[0]
         if len(h) != 64 or any(c not in "0123456789abcdef" for c in h):
             raise HTTPException(404, "Image not found.")
         row = await portfolio.db.fetchone(
@@ -1065,7 +1076,8 @@ def create_portfolio_app(
         )
         if row is None:
             raise HTTPException(404, "Image not found.")
-        return Response(bytes(row["jpg"]), media_type="image/jpeg")
+        data = bytes(row["jpg"])
+        return Response(data, media_type=image_format(data).mime)
 
     # Social preview images. Renders are cached by content version, so a
     # crawler can't force fresh renders by varying ?v=.
@@ -1292,8 +1304,11 @@ def create_portfolio_app(
 def main() -> None:
     app = create_portfolio_app(
         os.environ.get("NFT_PORTFOLIO_DIR", "data/nft-portfolio"),
-        max_jpg_bytes=int(
-            os.environ.get("NFT_PORTFOLIO_MAX_JPG_BYTES", str(10 * 1024 * 1024))
+        max_image_bytes=int(
+            os.environ.get("NFT_PORTFOLIO_MAX_IMAGE_BYTES")
+            # The setting's earlier name, from when only JPGs were supported.
+            or os.environ.get("NFT_PORTFOLIO_MAX_JPG_BYTES")
+            or str(10 * 1024 * 1024)
         ),
         # Unset means no per-collection limit (storage is still capped).
         max_cards=(

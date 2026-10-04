@@ -4,23 +4,23 @@ import { ArrowRight, Download, KeyRound, Lock, Plus, ShieldX, ImageOff } from 'l
 import { checked, getJSON } from './api.mjs';
 import { openLink } from './link.mjs';
 import { Button, CheckRow, DrawnCheck, Identicon, Spinner, Tilt, useTint } from './ui.jsx';
+import { imageUrl } from './formats.mjs';
 
-const transferTools = () => Promise.all([import('./wallet/jpg.ts'), import('./wallet/ps.ts')]);
-const imageUrl = (h) => `/api/images/${h}.jpg`;
+const transferTools = () => Promise.all([import('./wallet/image.ts'), import('./wallet/ps.ts')]);
 const toHex = (b) => Array.from(b, (x) => x.toString(16).padStart(2, '0')).join('');
 
 // Decrypt and check a link's credential entirely in the browser before offering to claim it.
 async function inspect(link, fragment, password, config) {
   const token = await openLink(link.envelope, { id: link.id, h: link.h, fragment, password });
-  const [{ transferJpg, splitJpg }, ps] = await transferTools();
+  const [{ transferImage, splitImage }, ps] = await transferTools();
   const cred = ps.decodeToken(token);
   if (cred.h !== link.h) throw new Error('This link carries a credential for a different picture.');
   ps.verifyCredential(cred, config);
-  const jpg = new Uint8Array(await (await checked(await fetch(imageUrl(link.h)))).arrayBuffer());
-  if (splitJpg(jpg).token || toHex(ps.integer(ps.hashAsset(jpg))) !== cred.h) throw new Error('The public picture doesn’t match this NFT.');
+  const image = new Uint8Array(await (await checked(await fetch(imageUrl(link.h)))).arrayBuffer());
+  if (splitImage(image).token || toHex(ps.integer(ps.hashAsset(image))) !== cred.h) throw new Error('The public picture doesn’t match this NFT.');
   const state = await (await checked(await fetch('/v1/nft/checkstate', { method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ nullifiers: [ps.nullifier(cred)] }) }))).json();
-  return { file: transferJpg(jpg, token), unspent: state.states[0]?.state === 'UNSPENT' };
+  return { file: transferImage(image, token), unspent: state.states[0]?.state === 'UNSPENT' };
 }
 
 export default function ClaimPage({ linkId, config, identity, wallet, walletState, navigate, onCreate, onImport, onReceived }) {

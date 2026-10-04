@@ -5,8 +5,9 @@ import { ArrowDownToLine, Gavel, Heart, Image as ImageIcon, Search, Sparkles, Ta
 import { getJSON, signedRequest } from './api.mjs';
 import { uploadHeaders } from './turnstile.mjs';
 import { Button, Identicon, Modal, SkeletonCards, SkeletonRows, Spinner, Tilt, identiconColor, setAvatarVersion, useTint } from './ui.jsx';
+import { imageUrl } from './formats.mjs';
 
-export const imageUrl = (h) => `/api/images/${h}.jpg`;
+export { imageUrl };
 
 export function ago(seconds) {
   const d = Math.max(0, Date.now() / 1000 - seconds);

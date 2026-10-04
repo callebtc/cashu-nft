@@ -14,8 +14,9 @@ from functools import lru_cache
 from pathlib import Path
 from typing import List, Optional, Sequence, Tuple
 
-from PIL import Image, ImageDraw, ImageFont, ImageOps, UnidentifiedImageError
+from PIL import Image, ImageDraw, ImageFont, ImageOps
 
+from .portfolio_image import DECODE_ERRORS, flatten
 from .portfolio_og import sats
 
 FONTS = Path(__file__).parent / "fonts"
@@ -240,23 +241,19 @@ def _place(canvas: Image.Image, layer: Image.Image, cx: float, cy: float, deg: f
 # --- Pictures --------------------------------------------------------------
 
 
-def _open(jpg: Optional[bytes], size: int) -> Optional[Image.Image]:
-    """Decode a stored JPG to a centre-cropped square, or None if unusable."""
-    if jpg is None:
+def _open(data: Optional[bytes], size: int) -> Optional[Image.Image]:
+    """Decode a stored picture to a centre-cropped square, or None if unusable.
+    Transparent areas show the card's paper, as on the site."""
+    if data is None:
         return None
     try:
         with warnings.catch_warnings():
             warnings.simplefilter("error", Image.DecompressionBombWarning)
-            with Image.open(io.BytesIO(jpg)) as image:
+            with Image.open(io.BytesIO(data)) as image:
                 image.draft("RGB", (size, size))
-                oriented = ImageOps.exif_transpose(image).convert("RGB")
+                oriented = flatten(ImageOps.exif_transpose(image), PAPER)
                 return ImageOps.fit(oriented, (size, size), Image.Resampling.LANCZOS)
-    except (
-        UnidentifiedImageError,
-        OSError,
-        Image.DecompressionBombError,
-        Image.DecompressionBombWarning,
-    ):
+    except DECODE_ERRORS:
         return None
 
 

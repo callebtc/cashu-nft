@@ -26,11 +26,11 @@ function Cryptography({ onStart }) {
         <motion.section id="jpg" {...reveal}>
           <h2><span className="mono">01</span>The NFT is the JPG</h2>
           <p>An asset is identified by the hash of its exact bytes, reduced into the BLS12-381 scalar field:</p>
-          <Eq>{'h = SHA-256("Cashu_PS_Asset_v1" ‖ len ‖ jpg) mod r'}</Eq>
-          <p>Before minting, the app normalizes the file once: it applies the orientation flag, strips EXIF and XMP metadata and keeps the colour profile. The resulting bytes are what get hashed, stored and shown.</p>
+          <Eq>{'h = SHA-256("Cashu_PS_Asset_v1" ‖ len ‖ file) mod r'}</Eq>
+          <p>Before minting, the app normalizes the file once: it applies the orientation flag, strips metadata such as EXIF and XMP, and keeps the colour profile and any transparency. The resulting bytes are what get hashed, stored and shown.</p>
           <p>Ownership is a <em>Pointcheval–Sanders</em> (PS) signature over two attributes: the asset hash <span className="mono">h</span> and an owner secret <span className="mono">s</span> that only the owner knows.</p>
           <Eq>{'σ = (u, v),   v = (x + yₕ·h + yₛ·s) · u'}</Eq>
-          <p>Knowing <span className="mono">(σ, s)</span> means owning the NFT. To send it, the app writes the credential into one extra EXIF segment of the JPG. Remove that segment and you get back the exact bytes that hash to <span className="mono">h</span>, so the file proves which picture the credential belongs to.</p>
+          <p>Knowing <span className="mono">(σ, s)</span> means owning the NFT. To send it, the app writes the credential into one extra segment of the file: an EXIF segment in a JPG, a text chunk in a PNG. Remove that segment and you get back the exact bytes that hash to <span className="mono">h</span>, so the file proves which picture the credential belongs to.</p>
           <p className="aside">This is byte identity, not visual identity. A screenshot or re-encode of the same picture has a different <span className="mono">h</span> and carries no credential.</p>
         </motion.section>
 
@@ -49,7 +49,7 @@ function Cryptography({ onStart }) {
               <Eq>{"v = v' − t·Yₕ = (x + yₕ·h + yₛ·s)·u"}</Eq>
             </li>
           </ol>
-          <p className="aside">The duplicate tag is deterministic, which is what lets the mint reject exact duplicates. It also means anyone holding a candidate JPG can test it against a tag. This portfolio publishes the image anyway, so here blinding protects the owner secret, not the picture.</p>
+          <p className="aside">The duplicate tag is deterministic, which is what lets the mint reject exact duplicates. It also means anyone holding a candidate picture can test it against a tag. This portfolio publishes the image anyway, so here blinding protects the owner secret, not the picture.</p>
         </motion.section>
 
         <motion.section id="show" {...reveal}>
@@ -69,9 +69,9 @@ function Cryptography({ onStart }) {
 
         <motion.section id="send" {...reveal}>
           <h2><span className="mono">04</span>Transferring in zero knowledge</h2>
-          <p>Sending creates a <em>transfer JPG</em>: the image plus its credential. It's a bearer instrument. Whoever redeems it first owns the NFT.</p>
+          <p>Sending creates a <em>transfer file</em>: the image plus its credential. It's a bearer instrument. Whoever redeems it first owns the NFT.</p>
           <ol className="steps">
-            <li>The receiving browser extracts the credential and checks <span className="mono">H(jpg without the segment) = h</span> before contacting anyone.</li>
+            <li>The receiving browser extracts the credential and checks <span className="mono">H(file without the segment) = h</span> before contacting anyone.</li>
             <li>It presents the old credential with <span className="mono">h</span> hidden inside a Pedersen-style commitment, and blinds the signature to match:
               <Eq>{"κ = h·Ỹₕ + o·g̃        v″ = v′ + o·u′\ne(v″, g̃) = e(u′, X̃ + κ) · e(s·u′, Ỹₛ)"}</Eq>
             </li>
@@ -82,7 +82,7 @@ function Cryptography({ onStart }) {
           <h3 className="how-sub">Sending with a link</h3>
           <p>Instead of a file you can send a link. Your browser encrypts the credential with AES-256-GCM under a fresh random key <span className="mono">K</span>, which is placed only in the link's <span className="mono">#fragment</span>. Browsers never send fragments to servers, so the platform stores ciphertext it cannot open.</p>
           <Eq>{'key = HKDF(K ‖ PBKDF2(password, salt, 600 000), "link id ‖ h")\nlink = /claim/<id>#base64url(K)'}</Eq>
-          <p>With a password, the receiver needs both the link and the password. The ciphertext is bound to the link ID and the asset hash, and the receiving browser re-checks <span className="mono">H(jpg) = h</span> and the PS signature before claiming.</p>
+          <p>With a password, the receiver needs both the link and the password. The ciphertext is bound to the link ID and the asset hash, and the receiving browser re-checks <span className="mono">H(file) = h</span> and the PS signature before claiming.</p>
           <p className="aside">Canceling is a transfer to yourself: a fresh <span className="mono">s′</span>, the old <span className="mono">N</span> spent, every exported file and link void.</p>
         </motion.section>
 

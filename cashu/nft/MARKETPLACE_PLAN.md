@@ -955,6 +955,20 @@ and `make check` clean.
 
 ## Product changes (2026-10-02)
 
+- **PNG NFTs (2026-10-04).** Static PNGs can be minted, sent and listed like
+  JPGs. The asset hash, credential and protocol are unchanged: `h` still
+  hashes the public file's exact bytes. The PNG transfer envelope is one
+  `tEXt` chunk, keyword `PSNFT`, holding the token, written before `IEND` and
+  recognised at any chunk boundary; Python and the browser produce identical
+  bytes (shared fixture). Uploads are re-encoded losslessly with Pillow,
+  keeping transparency and the colour profile. Animated PNGs are refused for
+  now. Formats are a registry (`portfolio_image.py`, `src/formats.mjs`,
+  `src/wallet/image.ts`) so more can follow. Images are served at
+  `/api/images/<h>` with the stored file's Content-Type (old `.jpg` links keep
+  working). Moderation and preview images show transparent areas on the site's
+  backgrounds: moderation checks a transparent picture on both the light and
+  the dark background. `max_image_bytes` replaces `max_jpg_bytes` (the old
+  config key and environment variable still work).
 - **Turnstile on uploads (2026-10-03).** When
   `NFT_PORTFOLIO_TURNSTILE_SITEKEY`/`_SECRET` are set, mint and receive
   preparations and profile-picture uploads need a fresh Cloudflare Turnstile

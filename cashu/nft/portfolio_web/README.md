@@ -23,7 +23,7 @@ this directory; Vite proxies `/api` and `/v1` to the backend on port 8401.
 |---|---|---|
 | `NFT_PORTFOLIO_DIR` | `data/nft-portfolio` | Database and persisted mint seed |
 | `NFT_PORTFOLIO_HOST` / `NFT_PORTFOLIO_PORT` | `127.0.0.1` / `8401` | Listen address |
-| `NFT_PORTFOLIO_MAX_JPG_BYTES` | 10 MB | Upload limit per JPG |
+| `NFT_PORTFOLIO_MAX_IMAGE_BYTES` | 10 MB | Upload limit per picture (the old name `NFT_PORTFOLIO_MAX_JPG_BYTES` still works) |
 | `NFT_PORTFOLIO_MAX_CARDS` | unset (no limit) | Active NFTs per profile |
 | `NFT_PORTFOLIO_MAX_STORAGE_BYTES` | 1 GB | Total image storage |
 | `NFT_PORTFOLIO_TRUSTED_PROXY` | unset | Reverse proxy address (e.g. `127.0.0.1`) whose `X-Forwarded-For` is trusted for rate limiting |
@@ -144,19 +144,30 @@ after the sender cancels. The receiving browser decrypts, checks the
 credential against the public JPG and redeems it through the normal receive
 flow. A forgotten password cannot be recovered; the sender can cancel.
 
-## JPG handling
+## Picture handling
 
-- Uploads must be JPGs. Before minting, the app applies EXIF orientation,
-  removes EXIF/XMP, keeps the colour profile, and hashes the resulting bytes.
-  Exact byte duplicates cannot be minted twice; visually identical images with
-  different bytes can.
-- "Download transfer JPG" embeds the bearer token in a dedicated EXIF segment.
-  The card stays in the collection as "Transfer ready".
-- Receiving strips only that segment, checks the remaining bytes against the
-  credential's asset hash, then redeems. The first successful redemption wins;
-  the sender's card moves to the public Sent shelf.
+- Uploads can be JPGs or PNGs (static; animated PNGs are refused for now).
+  Before minting, the server re-encodes the picture in its own format: it
+  applies the orientation flag, removes metadata (EXIF, XMP, text chunks), keeps
+  the colour profile and, for PNG, the transparency, and hashes the resulting
+  bytes. Exact byte duplicates cannot be minted twice; visually identical
+  images with different bytes can, and a JPG and a PNG of the same picture are
+  separate NFTs.
+- A transfer file is the public picture plus one envelope carrying the bearer
+  token: a dedicated EXIF segment right after SOI in a JPG, a `tEXt` chunk
+  (keyword `PSNFT`) right before `IEND` in a PNG. The card stays in the
+  collection as "Transfer ready".
+- Receiving strips only that envelope (found at any segment or chunk
+  boundary, never twice), checks the remaining bytes against the credential's
+  asset hash, then redeems. The first successful redemption wins; the sender's
+  card moves to the public Sent shelf.
 - "Cancel transfer" rotates the credential, invalidating every exported
-  transfer JPG.
+  transfer file.
+- Formats live in three places that must agree: `src/formats.mjs` (names,
+  types, extensions, magic bytes, for the UI), `src/wallet/image.ts` (envelope
+  parsing) and `cashu/nft/portfolio_image.py` (server rules). Adding a format
+  means adding it to all three, with a shared fixture in
+  `tests/fixtures/wallet.json` that both test suites check.
 - Send the **original file**. Screenshots, edits, recompression or metadata
   stripping (common in chat apps) break the transfer.
 - Public image downloads and "Download public proof" never contain the token.

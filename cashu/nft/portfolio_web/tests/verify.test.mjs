@@ -41,8 +41,8 @@ test('rejects the card under a different profile', () => {
   assert.equal(reason({ ...fx.owned, pubkey: fx.alice }, fx.alice).reason, 'Wrong profile context');
 });
 
-test('rejects altered JPG hash, keyset and mint parameters', () => {
-  assert.equal(reason({ ...fx.owned, h: fx.owned.h.replace(/.$/, (c) => c === '0' ? '1' : '0') }).reason, 'Wrong JPG identity');
+test('rejects altered picture hash, keyset and mint parameters', () => {
+  assert.equal(reason({ ...fx.owned, h: fx.owned.h.replace(/.$/, (c) => c === '0' ? '1' : '0') }).reason, 'Wrong picture identity');
   assert.equal(reason(fx.owned, fx.bob, { ...fx.config, keyset_id: '03' + '00'.repeat(32) }).reason, 'Untrusted mint keyset');
   const pk = fx.config.public_key;
   const badKey = pk.slice(0, 20) + (pk[20] === 'a' ? 'b' : 'a') + pk.slice(21);

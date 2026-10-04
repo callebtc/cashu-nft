@@ -383,7 +383,7 @@ export function ListingControls({ card, market, nftWallet, busy, onChanged, navi
   return mode === 'list' ? <div className="pending-box listing-box stack">
     <strong>List for sale</strong>
     <label className="field"><span>Asking price (sats you receive)</span><input inputMode="numeric" value={price} onChange={(e) => setPrice(e.target.value.replace(/\D/g, ''))} placeholder="e.g. 2100" autoFocus /></label>
-    <p className="hint">Listing refreshes this NFT’s credential: earlier transfer links and JPGs stop working. You’re paid when you accept an offer.</p>
+    <p className="hint">Listing refreshes this NFT’s credential: earlier transfer links and files stop working. You’re paid when you accept an offer.</p>
     {working ? <Button variant="primary" className="full" disabled icon={<Spinner />}>{working}</Button>
       : <HoldButton disabled={!ready || !value} onComplete={() => run('Listing', () => market.money.market.list(nftWallet, card, value), 'Listed. It’s on the market now.')} icon={<Tag size={16} />}>Hold to list</HoldButton>}
     <Button variant="ghost" onClick={() => setMode('')}>Cancel</Button>

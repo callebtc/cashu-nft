@@ -22,10 +22,10 @@ const encoded = (p: Point) => p.toBytes(true);
 export const g1 = bls.G1.Point.BASE; const g2 = bls.G2.Point.BASE;
 export const G_NULL = bls.G1.hashToCurve(utf8('ps_nullifier_base'), { DST: 'CASHU_PS_GNULL_XMD:SHA-256_SSWU_RO_' });
 const G_ASSET = bls.G1.hashToCurve(utf8('ps_asset_tag_base'), { DST: 'CASHU_PS_ASSET_TAG_XMD:SHA-256_SSWU_RO_' });
-export interface MintConfig { keyset_id: string; public_key: string; max_jpg_bytes?: number; }
+export interface MintConfig { keyset_id: string; public_key: string; max_image_bytes?: number; max_jpg_bytes?: number; }
 export interface Credential { u: string; v: string; h: string; s: string; keyset_id: string; }
 export interface Card { id: string; pubkey: string; h: string; title: string; showing: string; signature: string | null; status: string; created: number; sent: number | null; custody?: string; }
-export const hashAsset = (jpg: Uint8Array) => challenge(concatBytes(utf8('Cashu_PS_Asset_v1'), frame(jpg, 4)));
+export const hashAsset = (file: Uint8Array) => challenge(concatBytes(utf8('Cashu_PS_Asset_v1'), frame(file, 4)));
 export const nullifier = (cred: Credential) => bytesToHex(encoded(mul(G_NULL, scalar(cred.s, true))));
 const scalar = (hex: string, nonzero = false) => {
   if (!/^[0-9a-f]{64}$/.test(hex)) throw new Error('Invalid scalar encoding');
