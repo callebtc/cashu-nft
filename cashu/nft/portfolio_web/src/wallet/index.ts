@@ -10,7 +10,8 @@ import { checked, signedRequest } from '../api.mjs';
 import { uploadHeaders } from '../turnstile.mjs';
 import { EncryptedVault, walletSeed, type Envelope } from './vault.ts';
 import { ORDER, utf8, integer, boundPresentation, issueCommitment, finishIssue, finishBlindIssueV2, blindTransfer, finishBlind, hashAsset, nullifier, decodeToken, encodeToken, verifyCredential, publicCard, type MintConfig, type Credential, type Card } from './ps.ts';
-import { splitJpg, transferJpg } from './jpg.ts';
+import { splitImage, transferImage } from './image.ts';
+import { imageUrl } from '../formats.mjs';
 
 interface Prepared { id: string; h: string; title: string; jpg: string; card_id?: string | null; begin: { session: string; u: string; keyset_id: string } | null; legacy_token: string | null; }
 interface ProofRequest { b: string; proof: string; version?: 1 | 2 | 3; session?: string; asset_tag?: string; owner_commitment?: string; presentation?: string; new_owner_commitment?: string; new_proof?: string; }
@@ -51,25 +52,26 @@ export class BrowserNFTWallet {
     return this.post(`/prepare?kind=${kind}&title=${encodeURIComponent(title)}${cardId ? '&card_id=' + cardId : ''}${kind === 'mint' ? '&issuance_version=3' : ''}`, bytes, headers);
   }
   async mint(bytes: Uint8Array, title: string): Promise<Card> {
-    if (splitJpg(bytes).token) throw new Error('This is a transfer JPG. Use Receive JPG');
+    if (splitImage(bytes).token) throw new Error('This is a transfer file. Add it to receive the NFT inside');
     return this.lock(async () => {
-      const stage = await this.prepare('mint', bytes, title), jpg = fromBase64(stage.jpg);
-      const h = hashAsset(jpg), s = await this.ownerSecret(stage.id);
+      // The server returns the normalized picture under its original field name.
+      const stage = await this.prepare('mint', bytes, title), image = fromBase64(stage.jpg);
+      const h = hashAsset(image), s = await this.ownerSecret(stage.id);
       if (stage.h !== bytesToHex(integer(h))) throw new Error('Invalid mint preparation');
       const request = issueCommitment(this.config, h, s, stage.id);
       return this.saveAndExecute({ id: stage.id, h: stage.h, s: bytesToHex(integer(s)), cardId: stage.id, request });
     });
   }
   async receive(bytes: Uint8Array, title: string): Promise<Card> {
-    // No HTTP request happens before token/JPG matching and credential checks.
-    const { jpg, token } = splitJpg(bytes);
-    if (!token) throw new Error('This JPG has no transfer token. Ask for the original transfer file');
+    // No HTTP request happens before token/picture matching and credential checks.
+    const { image, token } = splitImage(bytes);
+    if (!token) throw new Error('This file has no transfer token. Ask for the original transfer file');
     const cred = decodeToken(token);
-    if (cred.h !== bytesToHex(integer(hashAsset(jpg)))) throw new Error('The embedded token does not belong to this JPG. Nothing was redeemed');
+    if (cred.h !== bytesToHex(integer(hashAsset(image)))) throw new Error('The embedded token does not belong to this picture. Nothing was redeemed');
     verifyCredential(cred, this.config);
     return this.lock(async () => {
       await this.unspent(cred);
-      const stage = await this.prepare('receive', jpg, title);
+      const stage = await this.prepare('receive', image, title);
       return this.swap(stage, cred);
     });
   }
@@ -78,13 +80,13 @@ export class BrowserNFTWallet {
       const stage = await this.prepare('migrate', new Uint8Array(), card.title, card.id);
       if (!stage.legacy_token) throw new Error('Legacy credential unavailable');
       const cred = decodeToken(stage.legacy_token);
-      if (cred.h !== card.h || cred.h !== bytesToHex(integer(hashAsset(fromBase64(stage.jpg))))) throw new Error('Legacy JPG identity mismatch');
+      if (cred.h !== card.h || cred.h !== bytesToHex(integer(hashAsset(fromBase64(stage.jpg))))) throw new Error('Legacy picture identity mismatch');
       verifyCredential(cred, this.config);
       return this.swap(stage, cred);
     });
   }
   private async swap(stage: Prepared, cred: Credential): Promise<Card> {
-    if (stage.h !== cred.h) throw new Error('The public JPG does not match this credential');
+    if (stage.h !== cred.h) throw new Error('The public picture does not match this credential');
     const begin = await (await checked(await fetch('/v1/nft/transfer/private/begin', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ nullifier: nullifier(cred) }) }))).json();
     const s = await this.ownerSecret(stage.id), blind = blindTransfer(this.config, cred, s, begin.u);
     // Only proofs and the new secret's encrypted recovery material persist.
@@ -117,7 +119,7 @@ export class BrowserNFTWallet {
       let discarded = 0;
       for (const card of backups.cards) {
         const cred = await this.vault.decrypt<Credential>(card.encrypted_credential, scope(card.id, card.h));
-        if (cred.h !== card.h) throw new Error('Wallet backup has the wrong JPG identity');
+        if (cred.h !== card.h) throw new Error('Wallet backup has the wrong picture identity');
         verifyCredential(cred, this.config);
         await this.vault.put('card:' + card.id, card.encrypted_credential);
       }
@@ -158,14 +160,14 @@ export class BrowserNFTWallet {
   async send(card: Card): Promise<Uint8Array> {
     return this.lock(async () => {
       const cred = await this.credential(card);
-      const jpg = new Uint8Array(await (await checked(await fetch(`/api/images/${card.h}.jpg`))).arrayBuffer());
-      if (bytesToHex(integer(hashAsset(jpg))) !== cred.h) throw new Error('The public JPG does not match your NFT');
-      const result = transferJpg(jpg, encodeToken(cred));
+      const image = new Uint8Array(await (await checked(await fetch(imageUrl(card.h)))).arrayBuffer());
+      if (bytesToHex(integer(hashAsset(image))) !== cred.h) throw new Error('The public picture does not match your NFT');
+      const result = transferImage(image, encodeToken(cred));
       await this.post(`/cards/${card.id}/ready`);
       return result;
     });
   }
-  /** The bearer token for a transfer link; marks the card as pending like a JPG export. */
+  /** The bearer token for a transfer link; marks the card as pending like a file export. */
   async sendToken(card: Card): Promise<{ token: string; nullifier: string }> {
     return this.lock(async () => {
       const cred = await this.credential(card);
@@ -199,7 +201,7 @@ export class BrowserNFTWallet {
     });
   }
   /** Delete for good: the mint burns the credential (pending links and
-   *  transfer JPGs die with it), then the server drops the card and its JPG. */
+   *  transfer files die with it), then the server drops the card and its picture. */
   async destroy(card: Card): Promise<void> {
     return this.lock(async () => {
       const cred = await this.credential(card);

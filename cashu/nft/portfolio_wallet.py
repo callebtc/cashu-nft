@@ -25,7 +25,7 @@ from .api import (
     _parse_proof,
 )
 from .ledger import AlreadyMintedError, AlreadySpentError
-from .portfolio_jpg import normalize_jpg, split_transfer_jpg, validate_jpg
+from .portfolio_image import normalize_image, split_transfer, validate_image
 from .wallet import NFTClient
 
 if TYPE_CHECKING:
@@ -36,7 +36,7 @@ LOCKS = [
     for name in ("ps_assets", "ps_nullifiers", "portfolio_cards")
 ]
 CLAIM_DOMAIN = "Cashu_NFT_Portfolio_Claim_v1\n"
-# Unfinished wallet actions stage JPGs server-side; bound them per profile
+# Unfinished wallet actions stage images server-side; bound them per profile
 # even when collections themselves are unlimited.
 MAX_PENDING_OPS = 100
 
@@ -118,16 +118,16 @@ class BrowserPortfolio:
         if kind not in ("mint", "receive", "rotate", "refresh", "migrate"):
             raise HTTPException(400, "Unknown wallet action.")
         if kind == "mint":
-            jpg = await run_in_threadpool(normalize_jpg, data)
+            jpg = await run_in_threadpool(normalize_image, data)
             await self.portfolio.moderation.check(pubkey, jpg)
         elif kind == "receive":
-            jpg, token = split_transfer_jpg(data)
+            jpg, token = split_transfer(data)
             if token:
                 raise HTTPException(
                     400,
-                    "Extract the transfer token locally before uploading the public JPG.",
+                    "Extract the transfer token locally before uploading the public image.",
                 )
-            await run_in_threadpool(validate_jpg, jpg)
+            await run_in_threadpool(validate_image, jpg)
             await self.portfolio.moderation.check(pubkey, jpg)
         else:
             jpg = b""
@@ -149,7 +149,7 @@ class BrowserPortfolio:
                 card = await self.portfolio.owned_card(conn, pubkey, card_id or "")
                 if kind == "rotate" and card["status"] != "ready":
                     raise HTTPException(
-                        409, "Download a transfer JPG before canceling it."
+                        409, "Download a transfer file before canceling it."
                     )
                 # Refresh: the same credential rotation for an owned card, the
                 # first step of listing it (earlier exports and links die).
@@ -170,7 +170,7 @@ class BrowserPortfolio:
                     "SELECT jpg FROM portfolio_images WHERE h=:h", {"h": card["h"]}
                 )
                 if image is None:
-                    raise HTTPException(404, "Public JPG not found.")
+                    raise HTTPException(404, "Public image not found.")
                 jpg, title = bytes(image["jpg"]), card["title"]
                 if kind == "migrate":
                     # This old credential was already known by the custodial
@@ -180,15 +180,15 @@ class BrowserPortfolio:
                             409, "This credential was already transferred."
                         )
                     legacy = "psnft1" + bytes(card["credential"]).hex()
-            if len(jpg) > self.portfolio.max_jpg_bytes:
-                raise HTTPException(413, "The public JPG is too large.")
+            if len(jpg) > self.portfolio.max_image_bytes:
+                raise HTTPException(413, "The public image is too large.")
             h = hash_asset(jpg).to_bytes(32, "big").hex()
             status = (
                 await self.ledger.asset_status(int(h, 16)) if kind == "mint" else ""
             )
             if status == "burned":
                 raise HTTPException(
-                    409, "This JPG was deleted and can't be minted again."
+                    409, "This picture was deleted and can't be minted again."
                 )
             if status not in ("", "unknown"):
                 raise AlreadyMintedError("asset was already minted")
@@ -198,7 +198,7 @@ class BrowserPortfolio:
             )
             if pending is not None and pending["n"] >= MAX_PENDING_OPS:
                 raise HTTPException(
-                    409, "Finish pending wallet actions before adding another JPG."
+                    409, "Finish pending wallet actions before adding another picture."
                 )
             limit = self.portfolio.max_cards
             if limit is not None:
@@ -308,7 +308,7 @@ class BrowserPortfolio:
                 tag = _parse_g1(request.asset_tag)
                 if tag != asset_tag(int(op["h"], 16)):
                     raise HTTPException(
-                        400, "The blind commitment does not match the public JPG."
+                        400, "The blind commitment does not match the public image."
                     )
                 issue = {
                     1: self.ledger.issue_nft_blind,
@@ -393,7 +393,7 @@ class BrowserPortfolio:
                 "completed",
             ):
                 raise HTTPException(
-                    409, "Complete this JPG's wallet action before publishing."
+                    409, "Complete this NFT's wallet action before publishing."
                 )
             if op["state"] == "completed":
                 row = await conn.fetchone(
@@ -462,10 +462,10 @@ class BrowserPortfolio:
         body: DeleteRequest,
         listed: Callable[[Connection, str], Awaitable[bool]],
     ) -> None:
-        """Burn an NFT the profile holds and erase its JPG.
+        """Burn an NFT the profile holds and erase its picture.
 
         The mint retires the asset for good, so pending links and transfer
-        JPGs die with it. Every card that showed this JPG (earlier owners'
+        files die with it. Every card that showed this picture (earlier owners'
         sent history included) goes too: the image is gone."""
         try:
             pres = Presentation.from_bytes(bytes.fromhex(body.presentation))

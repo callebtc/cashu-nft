@@ -22,6 +22,7 @@ from PIL import Image, ImageOps
 from starlette.concurrency import run_in_threadpool
 
 from ..core.db import Database
+from .portfolio_image import DARK, DECODE_ERRORS, PAPER, flatten
 
 INPUT_SIZE = 384
 MAX_CROPS = 4
@@ -47,11 +48,22 @@ class Classifier(Protocol):
     def nsfw_probability(self, image: Image.Image) -> float: ...
 
 
-def decode(data: bytes) -> Image.Image:
-    """An upright RGB image, decoded at a reduced scale where JPEG allows."""
+def appearances(data: bytes) -> List[Image.Image]:
+    """The picture as viewers see it: upright and opaque, decoded at a reduced
+    scale where JPEG allows. A picture with transparency comes twice, on the
+    site's light and dark backgrounds: what shows through differs, and the
+    colour of fully transparent pixels (which nobody sees) is dropped."""
     with Image.open(io.BytesIO(data)) as source:
         source.draft("RGB", (INPUT_SIZE, INPUT_SIZE))
-        return ImageOps.exif_transpose(source).convert("RGB")
+        upright = ImageOps.exif_transpose(source)
+        if not upright.has_transparency_data:
+            return [upright.convert("RGB")]
+        return [flatten(upright, PAPER), flatten(upright, DARK)]
+
+
+def decode(data: bytes) -> Image.Image:
+    """The picture as it shows on the site's light background."""
+    return appearances(data)[0]
 
 
 def views(image: Image.Image) -> List[Image.Image]:
@@ -152,21 +164,27 @@ class Moderation:
                 return True
         return False
 
-    async def check(self, pubkey: str, jpg: bytes) -> None:
+    async def check(self, pubkey: str, image: bytes) -> None:
         """Raise 422 for an image that was rejected before or that the
         classifier scores at or above the threshold; remember the latter."""
-        sha256 = hashlib.sha256(jpg).hexdigest()
+        sha256 = hashlib.sha256(image).hexdigest()
         try:
-            image = await run_in_threadpool(decode, jpg)
-        except (OSError, ValueError):
+            shown = await run_in_threadpool(appearances, image)
+        except (*DECODE_ERRORS, ValueError):
             raise HTTPException(400, "This image is damaged or can't be decoded.")
-        dhash = difference_hash(image)
+        dhash = difference_hash(shown[0])
         if await self.rejected(sha256, dhash):
             raise HTTPException(422, REJECTED_MESSAGE)
         if self.classifier is None:
             return
+        classifier = self.classifier
         async with self.lock:
-            score = await run_in_threadpool(self.classifier.nsfw_probability, image)
+            score = max(
+                [
+                    await run_in_threadpool(classifier.nsfw_probability, view)
+                    for view in shown
+                ]
+            )
         if score < self.threshold:
             return
         logger.info(f"Rejected an upload from {pubkey} (NSFW score {score:.2f})")

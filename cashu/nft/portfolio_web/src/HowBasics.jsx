@@ -38,7 +38,7 @@ function Picture({ x, y, w, h }) {
   </g>;
 }
 
-/* 1 · The token rides inside the JPG's EXIF header. */
+/* 1 · The token rides inside the file's metadata. */
 function TokenInFile() {
   return <Scene tone="lime">
     <rect x="86" y="28" width="148" height="156" rx="14" style={{ ...fill('var(--paper)'), ...ink }} />
@@ -134,7 +134,7 @@ function SendAnyWay() {
 
 const CARDS = [
   {
-    art: TokenInFile, title: 'Your NFT lives inside the JPG',
+    art: TokenInFile, title: 'Your NFT lives inside the file',
     body: <>When you add a picture to your collection, the mint issues an anonymous Cashu ecash token for it. When you save the NFT to send it, that token is tucked into the file’s <em>EXIF header</em>, the hidden notes every photo carries, like the camera model and date. The picture looks exactly the same. The token inside decides who owns it.</>,
   },
   {
@@ -148,7 +148,7 @@ const CARDS = [
   },
   {
     art: SendAnyWay, title: 'Send it any way you like',
-    body: <>Mint any JPG and save it to your computer. To give it to a friend, hand it over on a USB stick, attach it to an email, or share a link. When your friend adds the JPG to their wallet, it becomes theirs and stops being yours: the mint retires your copy for good. Tip: send the file itself, since screenshots and chat apps strip out the token.</>,
+    body: <>Mint any JPG or PNG and save it to your computer. To give it to a friend, hand it over on a USB stick, attach it to an email, or share a link. When your friend adds the file to their wallet, it becomes theirs and stops being yours: the mint retires your copy for good. Tip: send the file itself, since screenshots and chat apps strip out the token.</>,
   },
 ];
 

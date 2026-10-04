@@ -3,7 +3,7 @@
 // browser: everything it needs comes from the profile key and the server's
 // encrypted backups. Usage: node --import tsx tests/market.e2e.mjs <phase> '<json>'
 import 'fake-indexeddb/auto';
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { signedRequest } from '../src/api.mjs';
 import { profileKey } from '../src/crypto.mjs';
 import { openWallet } from '../src/wallet/index.ts';
@@ -85,6 +85,32 @@ const phases = {
       if (!drop_reply || !/NFT issuance reply lost/.test(error.message)) throw error;
       return { pubkey, interrupted: true, nftIssueRequests };
     } finally { await manager.dispose(); }
+  },
+
+  /** Mint any supported picture file (JPG, PNG). */
+  async image_mint({ secret, path, title = 'Picture' }) {
+    const pubkey = await profile(secret, 'Collector');
+    const { manager, wallet } = await nftWallet(secret);
+    try { return { pubkey, minted: await wallet.mint(Uint8Array.from(readFileSync(path)), title) }; }
+    finally { await manager.dispose(); }
+  },
+  /** Export an NFT as a transfer file, written to `out`. */
+  async image_send({ secret, card_id, out }) {
+    const { manager, wallet } = await nftWallet(secret);
+    try {
+      await wallet.recover(); // each phase is a fresh process with empty browser storage
+      const card = (await get(`/api/profiles/${profileKey(secret)}`)).cards.find((c) => c.id === card_id);
+      const file = await wallet.send(card);
+      writeFileSync(out, file);
+      return { bytes: file.length };
+    } finally { await manager.dispose(); }
+  },
+  /** Receive the NFT inside a transfer file. */
+  async image_receive({ secret, path, title = 'Received' }) {
+    const pubkey = await profile(secret, 'Receiver');
+    const { manager, wallet } = await nftWallet(secret);
+    try { return { pubkey, received: await wallet.receive(Uint8Array.from(readFileSync(path)), title) }; }
+    finally { await manager.dispose(); }
   },
 
   async nft_recover({ secret }) {

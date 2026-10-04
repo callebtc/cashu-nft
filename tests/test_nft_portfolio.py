@@ -38,7 +38,12 @@ from cashu.nft.portfolio import (
     claim_digest,
     create_portfolio_app,
 )
-from cashu.nft.portfolio_jpg import normalize_jpg, split_transfer_jpg, validate_jpg
+from cashu.nft.portfolio_image import (
+    normalize_image,
+    split_transfer,
+    split_transfer_jpg,
+    validate_image,
+)
 from cashu.nft.portfolio_og import profile_version
 from cashu.nft.wallet import TOKEN_PREFIX, NFTClient
 
@@ -280,13 +285,14 @@ class Profile:
         if response.status_code != 200:
             return response
         card = response.json()
-        jpg = self.client.get(f"/api/images/{card['h']}.jpg").content
+        public = self.client.get(f"/api/images/{card['h']}")
         return httpx.Response(
             200,
             content=embed_token(
-                jpg, TOKEN_PREFIX + self.credentials[card_id].to_bytes().hex()
+                public.content,
+                TOKEN_PREFIX + self.credentials[card_id].to_bytes().hex(),
             ),
-            headers={"content-type": "image/jpeg"},
+            headers={"content-type": public.headers["content-type"]},
         )
 
     def cancel(self, card_id: str):
@@ -299,12 +305,12 @@ class Profile:
 
     def receive(self, jpg: bytes, title: str = "Got"):
         try:
-            clean, token = split_transfer_jpg(jpg)
+            clean, token = split_transfer(jpg)
             if token is None:
                 raise ValueError("No transfer token")
             cred = NFTClient.decode_token(token)
             if cred.h != hash_asset(clean):
-                raise ValueError("Wrong JPG. Nothing was redeemed")
+                raise ValueError("Wrong picture. Nothing was redeemed")
         except ValueError as error:
             return httpx.Response(400, json={"detail": str(error)})
         state = self.client.post(
@@ -520,13 +526,14 @@ def test_minting_routes_not_exposed(client):
 # --- (3) JPG validation and normalization ---------------------------------
 
 
-def test_rejects_non_jpg_and_malformed(client):
+def test_rejects_unsupported_and_malformed(client):
     alice = Profile(client)
     alice.create()
-    png = io.BytesIO()
-    Image.new("RGB", (8, 8)).save(png, format="PNG")
-    assert alice.mint(png.getvalue()).status_code == 400
+    gif = io.BytesIO()
+    Image.new("RGB", (8, 8)).save(gif, format="GIF")
+    assert alice.mint(gif.getvalue()).status_code == 400
     assert alice.mint(b"\xff\xd8not really a jpeg").status_code == 400
+    assert alice.mint(b"\x89PNG\r\n\x1a\nnot really a png").status_code == 400
     assert alice.mint(b"").status_code == 400
     # Header intact, scan data truncated: verify() passes, decoding fails.
     jpg = noisy_jpg(128)
@@ -535,11 +542,12 @@ def test_rejects_non_jpg_and_malformed(client):
     assert alice.get()["cards"] == []
 
 
-def test_validate_jpg_rejects_png_directly():
-    png = io.BytesIO()
-    Image.new("RGB", (8, 8)).save(png, format="PNG")
-    with pytest.raises(ValueError):
-        validate_jpg(png.getvalue())
+def test_validate_image_rejects_unsupported_formats():
+    for fmt in ("GIF", "WEBP", "BMP"):
+        other = io.BytesIO()
+        Image.new("RGB", (8, 8)).save(other, format=fmt)
+        with pytest.raises(ValueError, match="Use a JPG or PNG file"):
+            validate_image(other.getvalue())
 
 
 def test_normalize_applies_orientation_and_strips_metadata():
@@ -550,19 +558,19 @@ def test_normalize_applies_orientation_and_strips_metadata():
     src = make_jpg(40, 20, exif=exif)
     with Image.open(io.BytesIO(src)) as check:
         assert check.getexif().get(0x0112) == 6
-    out = normalize_jpg(src)
+    out = normalize_image(src)
     with Image.open(io.BytesIO(out)) as image:
         assert image.size == (20, 40)
         assert not image.getexif()
         assert "exif" not in image.info
     assert b"SecretCamMaker" not in out and b"leaky-software" not in out
-    assert normalize_jpg(src) == out  # deterministic
+    assert normalize_image(src) == out  # deterministic
 
 
 def test_normalize_rejects_transfer_jpg():
-    base = normalize_jpg(make_jpg())
+    base = normalize_image(make_jpg())
     with pytest.raises(ValueError):
-        normalize_jpg(embed_token(base, TOKEN_PREFIX + "00" * 10))
+        normalize_image(embed_token(base, TOKEN_PREFIX + "00" * 10))
 
 
 # --- (4) transfer envelope byte identity -----------------------------------
@@ -571,7 +579,7 @@ def test_normalize_rejects_transfer_jpg():
 def test_envelope_embed_and_remove_preserves_bytes():
     exif = Image.Exif()
     exif[0x010F] = "UserMeta"
-    for base in (normalize_jpg(make_jpg()), make_jpg(exif=exif)):
+    for base in (normalize_image(make_jpg()), make_jpg(exif=exif)):
         token = TOKEN_PREFIX + "ab" * 50
         wrapped = embed_token(base, token)
         assert wrapped != base
@@ -582,7 +590,7 @@ def test_envelope_embed_and_remove_preserves_bytes():
 
 
 def test_envelope_duplicate_rejected():
-    base = normalize_jpg(make_jpg())
+    base = normalize_image(make_jpg())
     token = TOKEN_PREFIX + "cd" * 20
     once = embed_token(base, token)
     segment = once[2 : len(once) - len(base) + 2]
@@ -791,7 +799,7 @@ def test_image_token_mismatch_rejected_before_spending(client):
     card, transfer = exported(alice)
     _, token = split_transfer_jpg(transfer)
     assert token is not None
-    other = normalize_jpg(make_jpg(color=(10, 200, 10)))
+    other = normalize_image(make_jpg(color=(10, 200, 10)))
     forged = embed_token(other, token)
     resp = bob.receive(forged)
     assert resp.status_code == 400
@@ -805,7 +813,7 @@ def test_image_token_mismatch_rejected_before_spending(client):
 def test_receive_garbage_token_rejected(client):
     alice = Profile(client)
     alice.create()
-    base = normalize_jpg(make_jpg())
+    base = normalize_image(make_jpg())
     assert alice.receive(embed_token(base, TOKEN_PREFIX + "zz")).status_code == 400
     assert alice.receive(embed_token(base, TOKEN_PREFIX + "00" * 8)).status_code == 400
 
@@ -839,7 +847,7 @@ def test_max_cards_limit(tmp_path):
 
 def test_max_jpg_bytes_limit(tmp_path):
     small = make_jpg(8, 8)
-    app = create_portfolio_app(str(tmp_path / "p"), max_jpg_bytes=len(small) + 10)
+    app = create_portfolio_app(str(tmp_path / "p"), max_image_bytes=len(small) + 10)
     with TestClient(app) as client:
         alice = Profile(client)
         alice.create()
@@ -850,8 +858,8 @@ def test_max_jpg_bytes_limit(tmp_path):
 def test_normalized_jpg_over_limit_rejected(tmp_path):
     # Upload fits, but the q95 re-encode grows beyond the limit.
     src = noisy_jpg(64, quality=30)
-    assert len(normalize_jpg(src)) > len(src)
-    app = create_portfolio_app(str(tmp_path / "p"), max_jpg_bytes=len(src))
+    assert len(normalize_image(src)) > len(src)
+    app = create_portfolio_app(str(tmp_path / "p"), max_image_bytes=len(src))
     with TestClient(app) as client:
         alice = Profile(client)
         alice.create()

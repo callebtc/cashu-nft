@@ -6,6 +6,9 @@ import { bytesToHex } from '@noble/hashes/utils.js';
 import { EncryptedVault, walletSeed } from '../src/wallet/vault.ts';
 import { hashAsset, integer, encodeToken, decodeToken, verifyCredential, publicCard } from '../src/wallet/ps.ts';
 import { splitJpg, transferJpg } from '../src/wallet/jpg.ts';
+import { crc32, splitPng, transferPng } from '../src/wallet/png.ts';
+import { splitImage, transferImage } from '../src/wallet/image.ts';
+import { ACCEPT, LABELS, fileFormat, formatOf, withoutExtension } from '../src/formats.mjs';
 import { profileKey, verifyCard } from '../src/crypto.mjs';
 import { openWallet } from '../src/wallet/index.ts';
 
@@ -26,6 +29,55 @@ test('Python credentials and EXIF transfers match the browser implementation', (
   const duplicate = new Uint8Array([...wrapped.slice(0,2), ...segment, ...wrapped.slice(2)]);
   assert.throws(() => splitJpg(duplicate), /multiple/);
   assert.throws(() => decodeToken(token.slice(0,-2)), /Invalid/);
+});
+
+const png = Uint8Array.from(Buffer.from(fixture.png, 'base64'));
+const pngTransfer = Uint8Array.from(Buffer.from(fixture.png_transfer, 'base64'));
+const concat = (...parts) => Uint8Array.from(parts.flatMap((p) => [...p]));
+const pngChunk = (type, data = []) => {
+  const body = concat(new TextEncoder().encode(type), data);
+  const u32 = (n) => [n >>> 24, (n >>> 16) & 255, (n >>> 8) & 255, n & 255];
+  return concat(u32(data.length), body, u32(crc32(body)));
+};
+
+test('PNG transfer files match the Python implementation', () => {
+  const token = encodeToken(fixture.credential);
+  assert.equal(crc32(new TextEncoder().encode('123456789')), 0xcbf43926);
+  assert.deepEqual(transferPng(png, token), pngTransfer);
+  assert.deepEqual(splitPng(pngTransfer), { image: png, token });
+  assert.deepEqual(splitPng(png), { image: png, token: null });
+  // The owner's own text chunk stays part of the public picture.
+  assert.ok(Buffer.from(png).includes('Author'));
+  // Found at any chunk boundary, not only before IEND, but never twice.
+  const envelope = pngTransfer.slice(png.length - 12, pngTransfer.length - 12);
+  const early = concat(png.slice(0, 33), envelope, png.slice(33));
+  assert.deepEqual(splitPng(early), { image: png, token });
+  assert.throws(() => splitPng(concat(early.slice(0, -12), envelope, early.slice(-12))), /multiple/);
+  assert.throws(() => transferPng(pngTransfer, token), /already contains/);
+  // The file must end at IEND; animated PNGs aren't supported yet.
+  assert.throws(() => splitPng(concat(pngTransfer, [0])), /after its end/);
+  assert.throws(() => splitPng(concat(png.slice(0, 33), pngChunk('acTL', [0, 0, 0, 2, 0, 0, 0, 0]), png.slice(33))), /Animated/);
+  // A tEXt chunk that only looks like ours is kept, so the hash check fails safely.
+  const lookalike = pngChunk('tEXt', concat(new TextEncoder().encode('PSNFT\0'), new TextEncoder().encode(token + ' ')));
+  const tampered = concat(png.slice(0, -12), lookalike, png.slice(-12));
+  assert.deepEqual(splitPng(tampered), { image: tampered, token: null });
+});
+
+test('the format dispatcher reads the first bytes and covers every format', () => {
+  const token = encodeToken(fixture.credential);
+  assert.deepEqual(transferImage(png, token), pngTransfer);
+  assert.deepEqual(splitImage(pngTransfer), { image: png, token });
+  assert.deepEqual(splitImage(transferImage(jpg, token)), { image: jpg, token });
+  assert.equal(formatOf(png).name, 'png');
+  assert.equal(formatOf(jpg).name, 'jpg');
+  assert.equal(formatOf(new TextEncoder().encode('GIF89a')), null);
+  assert.throws(() => splitImage(new TextEncoder().encode('GIF89a')), /Choose a JPG or PNG file/);
+  assert.equal(LABELS, 'JPG or PNG');
+  assert.equal(ACCEPT, 'image/jpeg,.jpg,.jpeg,image/png,.png');
+  assert.equal(fileFormat({ name: 'Sunset.PNG', type: '' }).name, 'png');
+  assert.equal(fileFormat({ name: 'clip.gif', type: 'image/gif' }), null);
+  assert.equal(withoutExtension('Sunset.jpeg'), 'Sunset');
+  assert.equal(withoutExtension('notes.txt'), 'notes.txt');
 });
 
 test('browser-generated showings bind the collector and fail for another profile', () => {

@@ -71,7 +71,7 @@ export function verifyCard(card, expectedPubkey, config) {
     const keyset = bytesToHex(p.slice(0, 33));
     if (keyset !== config.keyset_id) throw new Error('Untrusted mint keyset');
     const h = scalar(p.slice(33, 65));
-    if (bytesToHex(p.slice(33, 65)) !== card.h) throw new Error('Wrong JPG identity');
+    if (bytesToHex(p.slice(33, 65)) !== card.h) throw new Error('Wrong picture identity');
     const expected = textBytes(expectedContext(expectedPubkey, card.h, keyset));
     if (bytesToHex(context) !== bytesToHex(expected)) throw new Error('Wrong profile context');
     const [u, v, us, N] = [65, 113, 161, 209].map((offset) => point(bls.G1, p.slice(offset, offset + 48)));

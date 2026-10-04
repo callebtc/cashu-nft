@@ -21,12 +21,13 @@ import { linkUrl, newLinkId, sealLink } from './link.mjs';
 import { ListingControls, ListingPage, MarketPage, OffersPage, PendingPurchases, useMarket } from './market.jsx';
 import { WalletPage } from './WalletPage.jsx';
 import { local } from './storage.ts';
+import { ACCEPT, LABELS, fileFormat, formatOf, imageUrl, withoutExtension } from './formats.mjs';
 import { HOME, MOVED_FROM, MoveOffer, MoveReceive, MoveStranded, movePlan, redirectHome } from './move.jsx';
 import { ActivityItem, ActivityList, ActivityPage, CollectionCard, EditCollectionDialog, ExplorePage, FollowButton, LikeButton, MarketCard,
   NetworkDialog, Segmented, useRelations } from './social.jsx';
 
 const openWallet = (...args) => import('./wallet/index.ts').then((module) => module.openWallet(...args));
-const transferTools = () => Promise.all([import('./wallet/jpg.ts'), import('./wallet/ps.ts')]);
+const transferTools = () => Promise.all([import('./wallet/image.ts'), import('./wallet/ps.ts')]);
 
 const KEYRING = 'cashu-nft-keys-v1', ACTIVE = 'cashu-nft-active-v1', MINT_PIN = 'cashu-nft-mint-v1';
 function storedKeys() {
@@ -63,14 +64,21 @@ function readRoute() {
   if (claim) return { page: 'claim', id: claim[1] };
   return { page: 'home' };
 }
-const imageUrl = (h) => `/api/images/${h}.jpg`;
-// A deleted NFT's JPG is gone, but sales, offers and old listings still name
-// it: show a neutral placeholder rather than a broken image.
-const MISSING_JPG = 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><rect width="100" height="100" fill="#ebe6d9"/><path d="M38 38 L62 62 M62 38 L38 62" stroke="#5d5a52" stroke-width="5" stroke-linecap="round"/></svg>');
+// A deleted NFT's picture is gone, but sales, offers and old listings still
+// name it: show a neutral placeholder rather than a broken image.
+const MISSING_IMAGE = 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><rect width="100" height="100" fill="#ebe6d9"/><path d="M38 38 L62 62 M62 38 L38 62" stroke="#5d5a52" stroke-width="5" stroke-linecap="round"/></svg>');
 window.addEventListener('error', (e) => {
   const img = e.target;
-  if (img instanceof HTMLImageElement && img.src.includes('/api/images/')) img.src = MISSING_JPG;
+  if (img instanceof HTMLImageElement && img.src.includes('/api/images/')) img.src = MISSING_IMAGE;
 }, true);
+// Download an NFT's public picture under a name with the right extension.
+async function saveImage(h) {
+  try {
+    const bytes = new Uint8Array(await (await checked(await fetch(imageUrl(h)))).arrayBuffer());
+    const format = formatOf(bytes);
+    download(new Blob([bytes], { type: format?.mime || 'application/octet-stream' }), `cashu-${h.slice(0, 12)}.${format?.name || 'bin'}`);
+  } catch (e) { toast.error(e.message); }
+}
 const tileIn = (i) => ({ initial: { opacity: 0, y: 16 }, whileInView: { opacity: 1, y: 0 }, viewport: { once: true, margin: '-40px' }, transition: { delay: i * .06, type: 'spring', stiffness: 220, damping: 26 } });
 
 function useVerification(profile, config, refresh) {
@@ -247,7 +255,7 @@ function CardDetail({ card, result, owner, busy, config, canSend: walletCanSend,
 
           {owner && !sent && ready && <div className="pending-box">
             <strong>Transfer pending</strong>
-            <p>A transfer link or JPG exists for this NFT. Whoever claims it first becomes the owner. Cancel to void every link and file.</p>
+            <p>A transfer link or file exists for this NFT. Whoever claims it first becomes the owner. Cancel to void every link and file.</p>
             <div className="row">
               <Button variant="secondary" icon={<Send size={15} />} disabled={!!busy || !canSend} onClick={() => { resetSend(); setView('send'); }}>Send again</Button>
               <Button variant={confirmCancel ? 'danger' : 'secondary'} icon={<Undo2 size={15} />} disabled={!!busy}
@@ -261,7 +269,7 @@ function CardDetail({ card, result, owner, busy, config, canSend: walletCanSend,
           {owner && !sent && market && <ListingControls card={card} market={market} nftWallet={nftWallet} busy={busy} onChanged={onChanged} navigate={navigate} onListing={setListed} />}
 
           <div className="detail-links">
-            <Button variant="ghost" size="sm" icon={<ImageDown size={14} />} onClick={() => { const a = document.createElement('a'); a.href = imageUrl(card.h); a.download = `cashu-${card.h.slice(0, 12)}.jpg`; a.click(); }}>Save image</Button>
+            <Button variant="ghost" size="sm" icon={<ImageDown size={14} />} onClick={() => saveImage(card.h)}>Save image</Button>
             {owner && !sent && <Button variant="ghost" size="sm" className="delete-link" icon={<Trash2 size={14} />} disabled={!!busy} onClick={() => setView('delete')}>Delete</Button>}
             <Button variant="ghost" size="sm" icon={<FileJson size={14} />} onClick={() => download(new Blob([JSON.stringify({ ...card, mint: { keyset_id: config.keyset_id, public_key: config.public_key } }, null, 2)], { type: 'application/json' }), `cashu-proof-${card.h.slice(0, 12)}.json`)}>Public proof</Button>
           </div>
@@ -271,7 +279,7 @@ function CardDetail({ card, result, owner, busy, config, canSend: walletCanSend,
         {view === 'send' && <motion.div key="send" className="detail-panel" {...panel}>
           <BackButton onClick={() => setView('info')} disabled={!!busy} />
           <h2>Send this NFT</h2>
-          <Segmented id={`send-${card.id}`} value={method} onChange={(m) => { if (!busy) setMethod(m); }} options={[['link', 'Share a link'], ['file', 'Transfer JPG']]} />
+          <Segmented id={`send-${card.id}`} value={method} onChange={(m) => { if (!busy) setMethod(m); }} options={[['link', 'Share a link'], ['file', 'Transfer file']]} />
           <AnimatePresence mode="wait" initial={false}>
             <motion.div key={method} className="stack" initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -6 }} transition={{ duration: .18 }}>
               {method === 'link' ? <>
@@ -288,7 +296,7 @@ function CardDetail({ card, result, owner, busy, config, canSend: walletCanSend,
                   <p className="hint">There’s no way to recover a forgotten password, but you can always cancel the transfer.</p>
                 </motion.div>}</AnimatePresence>
               </> : <>
-                <p className="muted">Creates a transfer JPG: this picture with its ownership credential inside. Whoever adds the file to their collection first owns the NFT.</p>
+                <p className="muted">Creates a transfer file: this picture with its ownership credential inside. Whoever adds the file to their collection first owns the NFT.</p>
                 <ul className="send-facts">
                   <li><span className="mono">01</span>Send it as a file or document. Screenshots, edits and chat-app compression remove the credential.</li>
                   <li><span className="mono">02</span>Treat the file like cash. Anyone who gets a copy can claim it.</li>
@@ -302,14 +310,14 @@ function CardDetail({ card, result, owner, busy, config, canSend: walletCanSend,
             <span>I understand that anyone holding this {method === 'link' ? (locked ? 'link and password' : 'link') : 'file'} can take ownership of <strong>{card.title}</strong> until I cancel.</span>
           </label>
           {busy ? <Button variant="primary" size="lg" className="full" disabled icon={<Spinner />}>{busy}</Button>
-            : <HoldButton disabled={!ack || !canSend || !passwordOk} onComplete={send} icon={method === 'link' ? <Link2 size={16} /> : <Send size={16} />}>{method === 'link' ? 'Hold to create link' : 'Hold to create transfer JPG'}</HoldButton>}
+            : <HoldButton disabled={!ack || !canSend || !passwordOk} onComplete={send} icon={method === 'link' ? <Link2 size={16} /> : <Send size={16} />}>{method === 'link' ? 'Hold to create link' : 'Hold to create transfer file'}</HoldButton>}
           <p className="hint" id="hold-hint">Press and hold to confirm. Releasing early cancels.</p>
         </motion.div>}
 
         {view === 'delete' && <motion.div key="delete" className="detail-panel" {...panel}>
           <BackButton onClick={() => setView('info')} disabled={!!busy} />
           <h2>Delete this NFT</h2>
-          <p className="muted">The mint burns it for good and the picture is removed from Nonfungible.cash, including earlier owners’ history.{ready ? ' The pending link or transfer JPG stops working.' : ''} You can’t mint this exact JPG again.</p>
+          <p className="muted">The mint burns it for good and the picture is removed from Nonfungible.cash, including earlier owners’ history.{ready ? ' The pending link or transfer file stops working.' : ''} You can’t mint this exact file again.</p>
           {listed ? <Notice action={listed.state === 'active' ? <Button size="sm" variant="secondary" disabled={!!busy || unlisting || !market?.money}
               icon={unlisting ? <Spinner /> : null} onClick={unlist}>Unlist</Button> : null}>
               {listed.state === 'active' ? 'This NFT is listed on the market. Unlist it first: pending offers are declined and refund at their deadlines.' : 'A sale of this NFT is settling, so it can’t be deleted.'}
@@ -331,8 +339,8 @@ function CardDetail({ card, result, owner, busy, config, canSend: walletCanSend,
             </div>
             <p className="muted">{result2.protected ? 'Send the password separately, ideally through a different app. ' : 'Anyone with this link can claim the NFT. '}Copy it now: for safety the link isn’t stored anywhere, not even here.</p>
           </> : <>
-            <h2>Transfer JPG saved</h2>
-            <p className="muted">Send <span className="mono">cashu-transfer-{card.h.slice(0, 12)}.jpg</span> to the new owner as a file. They open their collection, choose <strong>Add JPG</strong> and drop it in.</p>
+            <h2>Transfer file saved</h2>
+            <p className="muted">Send <span className="mono">{result2?.file}</span> to the new owner as a file. They open their collection, choose <strong>Add image</strong> and drop it in.</p>
           </>}
           <p className="muted">This card stays in your collection as <strong>Transfer pending</strong> until it’s claimed.</p>
           <Button variant="secondary" className="full" onClick={() => setView('info')}>Done</Button>
@@ -342,7 +350,7 @@ function CardDetail({ card, result, owner, busy, config, canSend: walletCanSend,
   </div>;
 }
 
-/* ---------- Unified add dialog: mint a new JPG or receive a transfer JPG ---------- */
+/* ---------- Unified add dialog: mint a new picture or receive a transfer file ---------- */
 
 function AddDialog({ open, close, config, wallet, onAdded }) {
   const [file, setFile] = useState(null), [preview, setPreview] = useState('');
@@ -356,28 +364,28 @@ function AddDialog({ open, close, config, wallet, onAdded }) {
     const url = URL.createObjectURL(file); setPreview(url);
     return () => URL.revokeObjectURL(url);
   }, [file]);
-  const limit = config?.max_jpg_bytes || 10485760;
+  const limit = config?.max_image_bytes || config?.max_jpg_bytes || 10485760;
 
   const choose = async (next) => {
     if (!next || working) return;
-    if (!/\.jpe?g$/i.test(next.name) && next.type !== 'image/jpeg') { toast.error('Choose a JPG file.'); return; }
-    if (next.size > limit + 65536) { toast.error(`Choose a JPG under ${Math.round(limit / 1048576)} MB.`); return; }
+    if (!fileFormat(next)) { toast.error(`Choose a ${LABELS} file.`); return; }
+    if (next.size > limit + 65536) { toast.error(`Choose a file under ${Math.round(limit / 1048576)} MB.`); return; }
     const id = ++inspection.current;
     const data = new Uint8Array(await next.arrayBuffer());
     let found;
-    try { const [{ splitJpg }] = await transferTools(); found = splitJpg(data); }
-    catch (e) { toast.error(e.message || 'This file is not a readable JPG.'); return; }
+    try { const [{ splitImage }] = await transferTools(); found = splitImage(data); }
+    catch (e) { toast.error(e.message || `This file is not a readable ${LABELS}.`); return; }
     if (id !== inspection.current) return;
-    setFile(next); setBytes(data); setTitle(next.name.replace(/\.jpe?g$/i, '').replace(/^cashu-transfer-[0-9a-f]+$/, 'Received JPG').slice(0, 80));
+    setFile(next); setBytes(data); setTitle(withoutExtension(next.name).replace(/^cashu-transfer-[0-9a-f]+$/, 'Received').slice(0, 80));
     if (!found.token) {
-      if (data.length > limit) { toast.error(`Choose a JPG under ${Math.round(limit / 1048576)} MB.`); setFile(null); return; }
+      if (data.length > limit) { toast.error(`Choose a file under ${Math.round(limit / 1048576)} MB.`); setFile(null); return; }
       setKind('mint'); setCheck(null); return;
     }
     setKind('receive'); setCheck({ state: 'checking' });
     try {
       const [, ps] = await transferTools();
       const cred = ps.decodeToken(found.token);
-      if (cred.h !== Array.from(ps.integer(ps.hashAsset(found.jpg)), (b) => b.toString(16).padStart(2, '0')).join('')) { setCheck({ state: 'mismatch' }); return; }
+      if (cred.h !== Array.from(ps.integer(ps.hashAsset(found.image)), (b) => b.toString(16).padStart(2, '0')).join('')) { setCheck({ state: 'mismatch' }); return; }
       try { ps.verifyCredential(cred, config); } catch (e) { setCheck({ state: 'invalid', error: e.message }); return; }
       const response = await checked(await fetch('/v1/nft/checkstate', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ nullifiers: [ps.nullifier(cred)] }) }));
       const state = (await response.json()).states[0]?.state;
@@ -390,29 +398,29 @@ function AddDialog({ open, close, config, wallet, onAdded }) {
     if (!bytes || !kind || !wallet || working) return;
     setWorking(kind === 'mint' ? 'Minting' : 'Receiving');
     try {
-      const asset = await wallet[kind](bytes, title.trim() || (kind === 'mint' ? 'Untitled' : 'Received JPG'));
+      const asset = await wallet[kind](bytes, title.trim() || (kind === 'mint' ? 'Untitled' : 'Received'));
       onAdded(asset, kind);
     } catch (e) { toast.error(e.message); setWorking(''); }
   };
 
   const receiveBlocked = kind === 'receive' && check?.state !== 'claimable';
-  return <Modal open={open} close={() => { if (!working) close(); }} title="Add a JPG"
-    description="Drop any JPG to mint it as a new NFT. Drop a transfer JPG to receive the NFT inside it.">
+  return <Modal open={open} close={() => { if (!working) close(); }} title="Add an image"
+    description={`Drop any ${LABELS} to mint it as a new NFT. Drop a transfer file to receive the NFT inside it.`}>
     <form onSubmit={submit} className="add-form">
       <AnimatePresence mode="wait" initial={false}>
         {!file ? <motion.label key="drop" {...panel} className={`dropzone ${dragging ? 'is-dragging' : ''}`}
           onDragOver={(e) => { e.preventDefault(); setDragging(true); }} onDragLeave={() => setDragging(false)}
           onDrop={(e) => { e.preventDefault(); setDragging(false); choose(e.dataTransfer.files[0]); }}>
-          <input type="file" accept="image/jpeg,.jpg,.jpeg" onChange={(e) => choose(e.target.files[0])} aria-label="Choose a JPG" />
+          <input type="file" accept={ACCEPT} onChange={(e) => choose(e.target.files[0])} aria-label={`Choose a ${LABELS}`} />
           <motion.span className="dropzone-icon" animate={{ y: dragging ? -4 : 0, scale: dragging ? 1.08 : 1 }} transition={{ type: 'spring', stiffness: 400, damping: 20 }}><Upload size={20} /></motion.span>
-          <strong>{dragging ? 'Release to add' : 'Drop a JPG here'}</strong>
+          <strong>{dragging ? 'Release to add' : `Drop a ${LABELS} here`}</strong>
           <span className="muted">or click to browse · up to {Math.round(limit / 1048576)} MB</span>
         </motion.label>
           : <motion.div key="review" {...panel} className="review">
             <div className="review-file">
               <motion.img src={preview} alt="" initial={{ scale: .92, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} transition={{ type: 'spring', stiffness: 300, damping: 24 }} />
               <div>
-                <span className={`kind-tag ${kind === 'receive' ? 'is-receive' : ''}`}>{kind === 'receive' ? 'Transfer JPG detected' : 'New JPG'}</span>
+                <span className={`kind-tag ${kind === 'receive' ? 'is-receive' : ''}`}>{kind === 'receive' ? 'Transfer file detected' : `New ${formatOf(bytes)?.label || 'image'}`}</span>
                 <strong className="ellipsis">{file.name}</strong>
                 <span className="muted">{(file.size / 1024).toFixed(0)} KB</span>
                 {!working && <button type="button" className="link" onClick={reset}>Choose another file</button>}
@@ -555,7 +563,7 @@ function App() {
     }).catch((e) => setFatal(e.message));
   }, []);
   // Public profile, plus (for your own) which cards have a pending transfer:
-  // the server only tells the owner that a transfer JPG or link exists.
+  // the server only tells the owner that a transfer file or link exists.
   const identityRef = useRef(identity);
   identityRef.current = identity;
   const fetchProfile = useCallback(async (key) => {
@@ -647,11 +655,11 @@ function App() {
   const added = async (asset, kind) => {
     await reload().catch(() => {});
     setDialog(null); setTab('collection'); setFresh(asset.id); setSelected(asset.id);
-    toast.success(kind === 'mint' ? 'Minted. The JPG is now an NFT.' : 'Received. The old credential is spent and the NFT is yours.');
+    toast.success(kind === 'mint' ? 'Minted. The picture is now an NFT.' : 'Received. The old credential is spent and the NFT is yours.');
     setTimeout(() => setFresh(null), 2200);
   };
   const sendCard = async (target, { method = 'file', password = '' } = {}) => {
-    setBusy(method === 'link' ? (password ? 'Encrypting link' : 'Creating link') : 'Creating transfer JPG');
+    setBusy(method === 'link' ? (password ? 'Encrypting link' : 'Creating link') : 'Creating transfer file');
     try {
       if (method === 'link') {
         const { token, nullifier } = await localWallet.sendToken(target);
@@ -662,10 +670,11 @@ function App() {
         toast.success('Link created. Copy it before closing.');
         return { url: linkUrl(window.location.origin, id, fragment), protected: !!password };
       }
-      const jpg = await localWallet.send(target);
-      download(new Blob([jpg], { type: 'image/jpeg' }), `cashu-transfer-${target.h.slice(0, 12)}.jpg`);
-      await reload(); toast.success('Transfer JPG saved. Send it as a file.');
-      return { file: true };
+      const transfer = await localWallet.send(target), format = formatOf(transfer);
+      const name = `cashu-transfer-${target.h.slice(0, 12)}.${format.name}`;
+      download(new Blob([transfer], { type: format.mime }), name);
+      await reload(); toast.success('Transfer file saved. Send it as a file.');
+      return { file: name };
     } catch (e) { toast.error(e.message); await reload().catch(() => {}); return null; } finally { setBusy(''); }
   };
   const deleteCard = async (target) => {
@@ -681,7 +690,7 @@ function App() {
   };
   const cancelTransfer = async (target) => {
     setBusy('Canceling transfer');
-    try { await localWallet.cancel(target); await reload(); toast.success('Transfer canceled. Every link and transfer JPG for it is now void.'); }
+    try { await localWallet.cancel(target); await reload(); toast.success('Transfer canceled. Every link and transfer file for it is now void.'); }
     catch (e) { toast.error(e.message); await reload().catch(() => {}); } finally { setBusy(''); }
   };
   const openProfile = (event) => {
@@ -781,7 +790,7 @@ function App() {
           <motion.div className="hero-copy" initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: .45, ease: 'easeOut' }}>
             <span className="pill">gm. Minting is free</span>
             <h1>The NFT <span className="hl">is</span> the JPG.</h1>
-            <p className="lead">Turn any picture into a collectible. Its proof of ownership lives inside the file, so sending the JPG sends the NFT.</p>
+            <p className="lead">Turn any picture into a collectible. Its proof of ownership lives inside the file, so sending the file sends the NFT.</p>
             <div className="hero-actions">
               {identity ? <Button variant="primary" size="lg" icon={<ArrowRight size={16} />} onClick={() => navigate(`/p/${identity.pubkey}`)}>Open my collection</Button>
                 : <Button variant="primary" size="lg" icon={<Plus size={16} />} onClick={openCreate} disabled={!config}>Start a collection</Button>}
@@ -826,7 +835,7 @@ function App() {
 
         <section className="bento">
           <motion.article className="tile tone-peach tile-wide" {...tileIn(0)}>
-            <div className="tile-text"><h3>Drop a JPG. Get an NFT.</h3><p>Pick a photo, a drawing, a meme. A few seconds later it's a one-of-one in your collection.</p></div>
+            <div className="tile-text"><h3>Drop a picture. Get an NFT.</h3><p>Pick a photo, a drawing, a meme. A few seconds later it's a one-of-one in your collection.</p></div>
             <div className="mini mini-drop" aria-hidden="true"><span className="mini-zone"><Upload size={18} /></span><span className="mini-card"><span /></span></div>
           </motion.article>
           <motion.article className="tile tone-sky" {...tileIn(1)}>
@@ -834,7 +843,7 @@ function App() {
             <div className="mini mini-badges" aria-hidden="true"><span className="badge badge-good"><span className="badge-inner"><span className="dot" />Verified owner</span></span></div>
           </motion.article>
           <motion.article className="tile tone-mint" {...tileIn(2)}>
-            <div className="tile-text"><h3>Send it like a photo</h3><p>Share a link or attach the JPG. Lock it with a password if you like. Whoever claims it first owns it.</p></div>
+            <div className="tile-text"><h3>Send it like a photo</h3><p>Share a link or attach the file. Lock it with a password if you like. Whoever claims it first owns it.</p></div>
             <div className="mini mini-send" aria-hidden="true"><span className="mini-file"><ImageDown size={14} />sunset.jpg</span><Send size={16} /></div>
           </motion.article>
           <motion.article className="tile tone-butter tile-wide" {...tileIn(3)}>
@@ -851,7 +860,7 @@ function App() {
         </motion.section>
 
         <section className="home-cta">
-          <h2>Your first NFT is one JPG away.</h2>
+          <h2>Your first NFT is one picture away.</h2>
           <div className="hero-actions">
             <Button variant="primary" size="lg" onClick={() => identity ? navigate(`/p/${identity.pubkey}`) : openCreate()} disabled={!config}>{identity ? 'Open my collection' : 'Start a collection'}</Button>
           </div>
@@ -881,7 +890,7 @@ function App() {
               {identity?.pubkey !== pubkey && profile && <LikeButton liked={relations.likes.includes(pubkey)} count={profile.likes ?? 0} onToggle={(on) => likeCollection(pubkey, on).catch(() => {})} />}
               {identity?.pubkey !== pubkey && profile && <FollowButton following={relations.following.includes(pubkey)} onToggle={(on) => followCollection(pubkey, on)} />}
               <Button variant="secondary" icon={<Link2 size={15} />} onClick={() => copyText(window.location.href, 'Profile link copied')}>Share</Button>
-              {owner && <Button variant="primary" icon={<Plus size={16} />} onClick={() => setDialog('add')} disabled={!canAdd}>Add JPG</Button>}
+              {owner && <Button variant="primary" icon={<Plus size={16} />} onClick={() => setDialog('add')} disabled={!canAdd}>Add image</Button>}
               {identity?.pubkey === pubkey && <Menu.Root>
                 <Menu.Trigger className="icon-btn icon-btn-bordered" aria-label="More actions"><Ellipsis size={17} /></Menu.Trigger>
                 <Menu.Portal><Menu.Positioner className="menu-layer" sideOffset={6} align="end"><Menu.Popup className="menu">
@@ -926,11 +935,11 @@ function App() {
             {tab === 'collection' && owner && <PendingPurchases market={market} />}
             {tab === 'collection' && owner && <motion.button className="nft-card add-tile" onClick={() => setDialog('add')} disabled={!canAdd}
               whileHover={canAdd ? { y: -3 } : undefined} whileTap={canAdd ? { scale: .98 } : undefined} transition={{ type: 'spring', stiffness: 400, damping: 26 }}>
-              <span className="add-icon"><Plus size={20} /></span><strong>Add JPG</strong><span className="muted">Mint a new one or receive a transfer</span>
+              <span className="add-icon"><Plus size={20} /></span><strong>Add image</strong><span className="muted">Mint a new one or receive a transfer</span>
             </motion.button>}
             {!shown.length && !(tab === 'collection' && owner) && <div className="empty">
               <strong>{tab === 'sent' ? 'Nothing sent yet' : 'No NFTs yet'}</strong>
-              <span className="muted">{tab === 'sent' ? 'NFTs appear here once their transfer JPG has been claimed.' : 'This collection is empty.'}</span>
+              <span className="muted">{tab === 'sent' ? 'NFTs appear here once their transfer file has been claimed.' : 'This collection is empty.'}</span>
             </div>}
           </motion.div>}
       </main>}

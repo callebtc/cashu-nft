@@ -89,7 +89,7 @@ backend.
 |---|---|---|
 | `NFT_PORTFOLIO_DIR` | `data/nft-portfolio` | Database and mint seed |
 | `NFT_PORTFOLIO_HOST` / `NFT_PORTFOLIO_PORT` | `127.0.0.1` / `8401` | Listen address |
-| `NFT_PORTFOLIO_MAX_JPG_BYTES` | 10 MB | Upload limit per JPG |
+| `NFT_PORTFOLIO_MAX_IMAGE_BYTES` | 10 MB | Upload limit per picture (the old name `NFT_PORTFOLIO_MAX_JPG_BYTES` still works) |
 | `NFT_PORTFOLIO_MAX_CARDS` | unset (no limit) | Optional cap on NFTs per collection |
 | `NFT_PORTFOLIO_MAX_STORAGE_BYTES` | 1 GB | Total image storage |
 | `NFT_PORTFOLIO_TRUSTED_PROXY` | unset | Reverse proxy address (e.g. `127.0.0.1`) whose `X-Forwarded-For` is trusted for rate limiting |

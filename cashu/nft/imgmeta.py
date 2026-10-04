@@ -174,14 +174,19 @@ def _png_chunks(data: bytes) -> Iterator[Tuple[int, bytes, bytes]]:
     raise ValueError("PNG has no IEND chunk")
 
 
-def _png_embed(data: bytes, token: bytes) -> bytes:
+def png_text_chunk(token: bytes) -> bytes:
+    """The tEXt chunk (keyword "PSNFT") that carries a token in a PNG."""
     payload = _PNG_KEYWORD + b"\x00" + token
-    chunk = (
+    return (
         len(payload).to_bytes(4, "big")
         + b"tEXt"
         + payload
         + zlib.crc32(b"tEXt" + payload).to_bytes(4, "big")
     )
+
+
+def _png_embed(data: bytes, token: bytes) -> bytes:
+    chunk = png_text_chunk(token)
     for pos, ctype, _ in _png_chunks(data):
         if ctype == b"IEND":
             return data[:pos] + chunk + data[pos:]
