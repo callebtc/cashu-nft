@@ -15,7 +15,6 @@ from collections import OrderedDict, defaultdict, deque
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Callable, Deque, Dict, List, Literal, Optional, cast
-from urllib.parse import urlparse
 
 import uvicorn
 from coincurve import PublicKeyXOnly
@@ -109,6 +108,10 @@ class ChallengeRequest(BaseModel):
 
 class ProfileRequest(BaseModel):
     name: str = Field(default="Collector", min_length=1, max_length=40)
+
+
+class TitleRequest(BaseModel):
+    title: str = Field(min_length=1, max_length=80)
 
 
 class ClaimRequest(BaseModel):
@@ -419,6 +422,18 @@ class Portfolio:
             )
             return jpg
 
+    async def rename(self, pubkey: str, card_id: str, title: str) -> dict:
+        """Rename an NFT the profile holds. Listings, activity and previews read
+        the card's title; links and finished sales keep the title they had."""
+        async with self.db.get_connection(locks=CARD_LOCKS) as conn:
+            await self.reconcile(conn, pubkey)
+            row = await self.owned_card(conn, pubkey, card_id)
+            await conn.execute(
+                "UPDATE portfolio_cards SET title=:t WHERE id=:id",
+                {"t": title, "id": card_id},
+            )
+            return self.public_card({**row, "title": title})
+
     async def cancel(self, pubkey: str, card_id: str) -> dict:
         async with self.db.get_connection(locks=CARD_LOCKS) as conn:
             await self.reconcile(conn, pubkey)
@@ -496,7 +511,7 @@ def create_portfolio_app(
         await portfolio.db.engine.dispose()
 
     app = FastAPI(
-        title="Cashu NFT portfolio", lifespan=lifespan, docs_url=None, redoc_url=None
+        title="Nonfungible.cash", lifespan=lifespan, docs_url=None, redoc_url=None
     )
     app.state.portfolio = portfolio
     app.state.browser_wallet = browser_wallet
@@ -854,6 +869,18 @@ def create_portfolio_app(
             )
             return portfolio.public_card({**row, "signature": body.signature})
 
+    @app.post("/api/profiles/{pubkey}/cards/{card_id}/title")
+    async def rename(pubkey: str, card_id: str, request: Request):
+        raw = await read_body(request, 512)
+        await authorize(request, pubkey, raw)
+        try:
+            title = TitleRequest.model_validate_json(raw).title.strip()
+        except ValidationError:
+            title = ""
+        if not title:
+            raise HTTPException(400, "Use a name between 1 and 80 characters.")
+        return await portfolio.rename(pubkey, card_id, title)
+
     @app.post("/api/profiles/{pubkey}/cards/{card_id}/export")
     async def export(pubkey: str, card_id: str, request: Request):
         raw = await read_body(request, 0)
@@ -1057,11 +1084,6 @@ def create_portfolio_app(
         )
         return {"jpg": bytes(row["jpg"]), "updated": row["updated"]} if row else None
 
-    def og_host(request: Request) -> str:
-        index = WEB_DIR / "index.html"
-        base = site_base(index.read_text()) if index.exists() else ""
-        return urlparse(base).netloc or request.url.netloc
-
     async def og_jpg(
         key: str, version: str, asked: str, render: Callable[[], bytes]
     ) -> Response:
@@ -1084,7 +1106,7 @@ def create_portfolio_app(
         )
 
     @app.api_route("/api/og/p/{pubkey}.jpg", methods=["GET", "HEAD"])
-    async def og_collection(pubkey: str, request: Request, v: str = ""):
+    async def og_collection(pubkey: str, v: str = ""):
         profile = await get_profile(pubkey)
         avatar = await avatar_row(pubkey) if profile["avatar"] else None
         cards = [Card(c["title"] or "", await stored_jpg(c["h"])) for c in fan(profile)]
@@ -1097,16 +1119,15 @@ def create_portfolio_app(
             likes=profile["likes"],
             cards=cards,
         )
-        host = og_host(request)
         return await og_jpg(
             f"p/{pubkey}/",
             profile_version(profile),
             v,
-            lambda: collection_image(preview, host),
+            lambda: collection_image(preview),
         )
 
     @app.api_route("/api/og/claim/{link_id}.jpg", methods=["GET", "HEAD"])
-    async def og_link(link_id: str, request: Request, v: str = ""):
+    async def og_link(link_id: str, v: str = ""):
         link = await get_link(link_id)
         avatar = await avatar_row(link["sender"])
         preview = LinkPreview(
@@ -1116,16 +1137,15 @@ def create_portfolio_app(
             card=Card(link["title"] or "", await stored_jpg(link["h"])),
             status=link["status"],
         )
-        host = og_host(request)
         return await og_jpg(
             f"claim/{link_id}/",
             link_version(link, avatar["updated"] if avatar else None),
             v,
-            lambda: link_image(preview, host),
+            lambda: link_image(preview),
         )
 
     @app.api_route("/api/og/p/{pubkey}/{card_id}.jpg", methods=["GET", "HEAD"])
-    async def og_nft(pubkey: str, card_id: str, request: Request, v: str = ""):
+    async def og_nft(pubkey: str, card_id: str, v: str = ""):
         profile = await get_profile(pubkey)
         card = next((c for c in profile["cards"] if c["id"] == card_id), None)
         if card is None:
@@ -1139,16 +1159,15 @@ def create_portfolio_app(
             nfts=owned_count(profile),
             sent=card["status"] == "sent",
         )
-        host = og_host(request)
         return await og_jpg(
             f"nft/{card_id}/",
             nft_version(profile, card),
             v,
-            lambda: nft_image(preview, host),
+            lambda: nft_image(preview),
         )
 
     @app.api_route("/api/og/market/{listing_id}.jpg", methods=["GET", "HEAD"])
-    async def og_listing(listing_id: str, request: Request, v: str = ""):
+    async def og_listing(listing_id: str, v: str = ""):
         if not re.fullmatch(r"[0-9a-f]{32}", listing_id):
             raise HTTPException(404, "Listing not found.")
         listing = await market.listing(listing_id)
@@ -1163,12 +1182,11 @@ def create_portfolio_app(
             bids=listing["bids"]["count"],
             top_bid=listing["bids"]["top"],
         )
-        host = og_host(request)
         return await og_jpg(
             f"market/{listing_id}/",
             listing_version(listing, avatar["updated"] if avatar else None),
             v,
-            lambda: listing_image(preview, host),
+            lambda: listing_image(preview),
         )
 
     # Retain bearer-redemption compatibility, but do not expose unauthenticated

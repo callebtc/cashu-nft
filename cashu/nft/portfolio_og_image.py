@@ -393,7 +393,7 @@ def _frame() -> Image.Image:
     return canvas
 
 
-def _brand(canvas: Image.Image, host: str) -> None:
+def _brand(canvas: Image.Image) -> None:
     draw = ImageDraw.Draw(canvas)
     x, y = FX + 60, FY + FH - 44 - 38
     _box(draw, x, y, 38, 38, 10, LIME, INK, 2.5)
@@ -403,18 +403,7 @@ def _brand(canvas: Image.Image, host: str) -> None:
         outline=DARK,
         width=_s(2.5),
     )
-    name = Style(DISPLAY, 28, 800)
-    _text(draw, x + 52, y + 29, "Cashu NFT", name, INK)
-    if host:
-        url = Style(SANS, 20, 600)
-        _text(
-            draw,
-            x + 52 + _width("Cashu NFT", name) + 14,
-            y + 28,
-            host,
-            url,
-            _mix(INK, PAPER, 0.55),
-        )
+    _text(draw, x + 52, y + 29, "Nonfungible.cash", Style(DISPLAY, 28, 800), INK)
 
 
 def _headline(
@@ -467,7 +456,7 @@ class CollectionPreview:
     cards: Sequence[Card]  # up to three, the cover first
 
 
-def collection_image(preview: CollectionPreview, host: str) -> bytes:
+def collection_image(preview: CollectionPreview) -> bytes:
     canvas = _frame()
     draw = ImageDraw.Draw(canvas)
 
@@ -480,8 +469,8 @@ def collection_image(preview: CollectionPreview, host: str) -> bytes:
         for n, word in ((preview.followers, "follower"), (preview.likes, "like"))
         if n
     ]
-    _lead(canvas, " · ".join(social) or "A collection on Cashu NFT", bottom + 20)
-    _brand(canvas, host)
+    _lead(canvas, " · ".join(social) or "A collection on Nonfungible.cash", bottom + 20)
+    _brand(canvas)
 
     stage = FX + FW - 18 - 470
     cards = list(preview.cards)[:3]
@@ -521,7 +510,7 @@ class LinkPreview:
     status: str  # "open", "claimed" or "void"
 
 
-def link_image(preview: LinkPreview, host: str) -> bytes:
+def link_image(preview: LinkPreview) -> bytes:
     canvas = _frame()
     draw = ImageDraw.Draw(canvas)
     used = preview.status != "open"
@@ -547,7 +536,7 @@ def link_image(preview: LinkPreview, host: str) -> bytes:
         "This link has already been used." if used else "Open the link to claim it.",
         bottom + 20,
     )
-    _brand(canvas, host)
+    _brand(canvas)
 
     stage = FX + FW - 18 - 470
     card = _card(preview.card, 350, "1 of 1", used)
@@ -589,7 +578,7 @@ class NFTPreview:
     sent: bool  # the NFT has left this collection
 
 
-def nft_image(preview: NFTPreview, host: str) -> bytes:
+def nft_image(preview: NFTPreview) -> bytes:
     canvas = _frame()
     draw = ImageDraw.Draw(canvas)
     _pill(
@@ -612,7 +601,7 @@ def nft_image(preview: NFTPreview, host: str) -> bytes:
         else f"One of {_plural(preview.nfts, 'NFT')} in this collection.",
         bottom + 20,
     )
-    _brand(canvas, host)
+    _brand(canvas)
 
     stage = FX + FW - 18 - 470
     _place(canvas, _card(preview.card, 350, "1 of 1", False), stage + 245, FY + 290, -4)
@@ -631,7 +620,7 @@ class ListingPreview:
     top_bid: Optional[int]
 
 
-def listing_image(preview: ListingPreview, host: str) -> bytes:
+def listing_image(preview: ListingPreview) -> bytes:
     canvas = _frame()
     draw = ImageDraw.Draw(canvas)
     listed = preview.state in ("active", "reserved")
@@ -667,7 +656,7 @@ def listing_image(preview: ListingPreview, host: str) -> bytes:
     else:
         lead = "Pay with Cashu ecash from any mint."
     _lead(canvas, lead, bottom + 20)
-    _brand(canvas, host)
+    _brand(canvas)
 
     stage = FX + FW - 18 - 470
     _place(

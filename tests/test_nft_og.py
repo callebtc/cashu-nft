@@ -18,7 +18,7 @@ from cashu.nft.portfolio_og_image import (
     nft_image,
 )
 
-INDEX = """<title>Cashu NFT</title>
+INDEX = """<title>Nonfungible.cash</title>
 <meta name="description" content="x" />
 <meta property="og:title" content="x" />
 <meta property="og:url" content="https://jpg.example/" />
@@ -41,9 +41,10 @@ def test_collection_meta_is_escaped_and_absolute():
     html = with_meta(INDEX, collection_meta(site_base(INDEX), profile))
     assert "<script>" not in html
     assert (
-        "<title>Tom &amp; &quot;Jerry&quot; &lt;script&gt; · Cashu NFT</title>" in html
+        "<title>Tom &amp; &quot;Jerry&quot; &lt;script&gt; · Nonfungible.cash</title>"
+        in html
     )
-    assert 'content="1 NFT on Cashu NFT: Dawn"' in html
+    assert 'content="1 NFT on Nonfungible.cash: Dawn"' in html
     assert f'og:image" content="https://jpg.example/api/og/p/{pk}.jpg?v=' in html
     assert "Hidden" not in html
 
@@ -65,7 +66,7 @@ def test_nft_meta_points_at_the_nft_in_its_collection():
     assert meta["og:title"] == "Dawn · Ana"
     assert meta["og:url"] == f"https://jpg.example/p/{pk}?nft=c1"
     assert meta["og:image"] == f"https://jpg.example/api/og/p/{pk}/c1.jpg?v=v1"
-    assert meta["description"] == "One of 1 NFT in Ana on Cashu NFT."
+    assert meta["description"] == "One of 1 NFT in Ana on Nonfungible.cash."
     sent = {**owned, "status": "sent"}
     assert "Sent on" in nft_meta("", profile, sent, "v1")["description"]
 
@@ -105,12 +106,10 @@ def assert_preview(data: bytes):
 def test_nft_and_listing_images_render_every_state():
     card = Card("Dawn", jpg())
     for sent in (False, True):
-        assert_preview(
-            nft_image(NFTPreview("ab" * 32, "Ana", None, card, 3, sent), "x")
-        )
+        assert_preview(nft_image(NFTPreview("ab" * 32, "Ana", None, card, 3, sent)))
     for state in ("active", "reserved", "sold", "unlisted", "stale"):
         preview = ListingPreview("ab" * 32, "Ana", None, card, 420, state, 2, 500)
-        assert_preview(listing_image(preview, "jpg.example"))
+        assert_preview(listing_image(preview))
     # A missing picture and no bids still render.
     empty = ListingPreview("ab" * 32, "", None, Card("", None), 1, "active", 0, None)
-    assert_preview(listing_image(empty, ""))
+    assert_preview(listing_image(empty))

@@ -1084,3 +1084,28 @@ def test_nft_and_listing_preview_routes(client):
     # Link checkers may probe pages with HEAD.
     for path in (f"/p/{alice.pubkey}?nft={card['id']}", f"/market/{'0' * 32}", "/"):
         assert client.head(path).status_code != 405
+
+
+def test_owner_renames_an_nft(client):
+    alice, bob = Profile(client), Profile(client)
+    alice.create("Alice")
+    bob.create("Bob")
+    card, transfer = exported(alice)
+    path = f"{alice.base}/cards/{card['id']}/title"
+
+    resp = alice.json_post(path, {"title": "  Dawn over the harbour  "})
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["title"] == "Dawn over the harbour"
+    assert alice.get()["cards"][0]["title"] == "Dawn over the harbour"
+
+    for bad in ({"title": "   "}, {"title": "x" * 81}, {"name": "Dawn"}):
+        resp = alice.json_post(path, bad)
+        assert resp.status_code == 400, resp.text
+    # Only the owner can rename: Bob signs for his own profile, not Alice's card.
+    resp = bob.json_post(f"{bob.base}/cards/{card['id']}/title", {"title": "Mine"})
+    assert resp.status_code == 404
+    assert alice.get()["cards"][0]["title"] == "Dawn over the harbour"
+
+    # Once the NFT has moved on, the sender's card can't be renamed.
+    assert bob.receive(transfer).status_code == 200
+    assert alice.json_post(path, {"title": "Too late"}).status_code == 409

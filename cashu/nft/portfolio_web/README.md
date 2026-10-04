@@ -1,4 +1,4 @@
-# Cashu NFT portfolio
+# Nonfungible.cash web app
 
 A multiuser web app for minting JPGs as PS NFT credentials, showing them on a
 public profile, and passing them on as transfer JPGs. It is separate from the
@@ -38,8 +38,20 @@ already pinned the old keyset refuse to load the app.
 
 `og/og.html` is the source of the 1200×630 OpenGraph image. After editing it, run
 `npm run og` (headless Chrome; set `CHROME` if it is not in the default macOS
-location) to regenerate `public/assets/og-1.png`. Rename the file when it changes
+location) to regenerate `public/assets/og-2.png`. Rename the file when it changes
 so caches pick up the new version.
+
+## Moving to a new domain
+
+Collection keys live in each browser's storage for one origin. When the site
+moves, list the old origin in `MOVED_FROM` (`src/move.jsx`), build with the new
+`PUBLIC_URL`, and keep serving the same build on the old origin. There, visitors
+without keys are redirected to the same page on the new origin. Visitors with
+keys get a page that opens the new origin in a small window and hands the keys
+over with `postMessage`, so they never appear in a URL or the browser history.
+NFT credentials and the ecash wallet follow on their own: they're backed up at
+the server, encrypted with the key. Copy and download buttons cover browsers
+that can't open the window.
 
 ## Tests
 

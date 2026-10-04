@@ -21,6 +21,7 @@ import { linkUrl, newLinkId, sealLink } from './link.mjs';
 import { ListingControls, ListingPage, MarketPage, OffersPage, PendingPurchases, useMarket } from './market.jsx';
 import { WalletPage } from './WalletPage.jsx';
 import { local } from './storage.ts';
+import { HOME, MOVED_FROM, MoveOffer, MoveReceive, MoveStranded, movePlan, redirectHome } from './move.jsx';
 import { ActivityItem, ActivityList, ActivityPage, CollectionCard, EditCollectionDialog, ExplorePage, FollowButton, LikeButton, MarketCard,
   NetworkDialog, Segmented, useRelations } from './social.jsx';
 
@@ -150,7 +151,7 @@ function PreviewCard({ variant, title, note }) {
 
 /* ---------- Card detail with guarded send flow ---------- */
 
-function CardDetail({ card, result, owner, busy, config, canSend: walletCanSend, onSend, onCancel, onDelete, isNew, market, nftWallet, onChanged, navigate }) {
+function CardDetail({ card, result, owner, busy, config, canSend: walletCanSend, onSend, onCancel, onDelete, onRename, isNew, market, nftWallet, onChanged, navigate }) {
   const [listed, setListed] = useState(null);
   const canSend = walletCanSend && !listed;
   const [flipped, setFlipped] = useState(false);
@@ -160,13 +161,22 @@ function CardDetail({ card, result, owner, busy, config, canSend: walletCanSend,
   const [method, setMethod] = useState('link'), [locked, setLocked] = useState(false);
   const [password, setPassword] = useState(''), [repeat, setRepeat] = useState(''), [result2, setResult2] = useState(null);
   const [unlisting, setUnlisting] = useState(false);
+  const [naming, setNaming] = useState(null), [savingName, setSavingName] = useState(false);
+  const saveName = async (event) => {
+    event.preventDefault();
+    const title = naming.trim();
+    if (!title || title === card.title) { setNaming(null); return; }
+    setSavingName(true);
+    if (await onRename(card, title)) setNaming(null);
+    setSavingName(false);
+  };
   const unlist = async () => {
     setUnlisting(true);
     try { await market.money.api.unlist(listed.id); setListed(null); onChanged(); toast.success('Unlisted. Pending offers were declined and refund at their deadlines.'); }
     catch (e) { toast.error(e.message); } finally { setUnlisting(false); }
   };
   const resetSend = () => { setAck(false); setPassword(''); setRepeat(''); setLocked(false); setMethod('link'); };
-  useEffect(() => { setView('info'); resetSend(); setResult2(null); setFlipped(false); setConfirmCancel(false); setListed(null); }, [card.id]);
+  useEffect(() => { setView('info'); resetSend(); setResult2(null); setFlipped(false); setConfirmCancel(false); setListed(null); setNaming(null); }, [card.id]);
   useEffect(() => { if (!confirmCancel) return; const t = setTimeout(() => setConfirmCancel(false), 4000); return () => clearTimeout(t); }, [confirmCancel]);
   const sent = card.status === 'sent', ready = card.status === 'ready';
   const v = verdict(result, ready);
@@ -180,7 +190,7 @@ function CardDetail({ card, result, owner, busy, config, canSend: walletCanSend,
     if (outcome) { setResult2(outcome); setView('sent'); setPassword(''); setRepeat(''); }
   };
   const share = async () => {
-    try { await navigator.share({ title: card.title, text: `I sent you "${card.title}" on Cashu NFT`, url: result2.url }); } catch { /* dismissed */ }
+    try { await navigator.share({ title: card.title, text: `I sent you "${card.title}" on Nonfungible.cash`, url: result2.url }); } catch { /* dismissed */ }
   };
 
   return <div className="detail">
@@ -209,7 +219,20 @@ function CardDetail({ card, result, owner, busy, config, canSend: walletCanSend,
         {view === 'info' && <motion.div key="info" className="detail-panel" {...panel}>
           <div className="detail-head">
             <StatusBadge result={result} ready={ready} large />
-            <h2>{card.title}</h2>
+            {naming !== null
+              ? <form className="rename" onSubmit={saveName}>
+                <input className="input rename-input" aria-label="NFT name" value={naming} maxLength={80} autoFocus disabled={savingName}
+                  onChange={(e) => setNaming(e.target.value)} onFocus={(e) => e.target.select()}
+                  onKeyDown={(e) => { if (e.key === 'Escape') { e.stopPropagation(); setNaming(null); } }} />
+                <div className="row">
+                  <Button type="submit" variant="primary" size="sm" disabled={savingName || !naming.trim()} icon={savingName ? <Spinner size={14} /> : <Check size={14} />}>Save</Button>
+                  <Button type="button" variant="ghost" size="sm" disabled={savingName} onClick={() => setNaming(null)}>Cancel</Button>
+                </div>
+              </form>
+              : <div className="title-row">
+                <h2>{card.title}</h2>
+                {owner && !sent && <button type="button" className="icon-btn rename-btn" aria-label="Rename" title="Rename" disabled={!!busy} onClick={() => setNaming(card.title)}><Pencil size={15} /></button>}
+              </div>}
             <p className="muted">{sent ? `Transferred ${card.sent ? date(card.sent) : ''}. Ownership has moved to a new credential.` : `Minted ${date(card.created)}`}</p>
           </div>
           <ul className="checks">
@@ -286,7 +309,7 @@ function CardDetail({ card, result, owner, busy, config, canSend: walletCanSend,
         {view === 'delete' && <motion.div key="delete" className="detail-panel" {...panel}>
           <BackButton onClick={() => setView('info')} disabled={!!busy} />
           <h2>Delete this NFT</h2>
-          <p className="muted">The mint burns it for good and the picture is removed from Cashu NFT, including earlier owners’ history.{ready ? ' The pending link or transfer JPG stops working.' : ''} You can’t mint this exact JPG again.</p>
+          <p className="muted">The mint burns it for good and the picture is removed from Nonfungible.cash, including earlier owners’ history.{ready ? ' The pending link or transfer JPG stops working.' : ''} You can’t mint this exact JPG again.</p>
           {listed ? <Notice action={listed.state === 'active' ? <Button size="sm" variant="secondary" disabled={!!busy || unlisting || !market?.money}
               icon={unlisting ? <Spinner /> : null} onClick={unlist}>Unlist</Button> : null}>
               {listed.state === 'active' ? 'This NFT is listed on the market. Unlist it first: pending offers are declined and refund at their deadlines.' : 'A sale of this NFT is settling, so it can’t be deleted.'}
@@ -433,10 +456,20 @@ function useTheme() {
   }, []);
   return [state, (mode) => api?.set(mode)];
 }
+// On phones the theme button gives its room to the wordmark; the choices move into the menu.
+function ThemeItems({ theme, setTheme }) {
+  return <>
+    <Menu.Separator className="menu-sep menu-phone" />
+    {THEMES.map(([mode, label, Icon]) => <Menu.Item key={mode} className="menu-item menu-phone" onClick={() => setTheme(mode)}>
+      <Icon size={15} />{label} theme{theme.mode === mode && <Check size={15} className="menu-check" />}
+    </Menu.Item>)}
+  </>;
+}
+
 function ThemeMenu({ theme, setTheme }) {
   const Current = THEMES.find(([m]) => m === theme.mode)?.[2] || Monitor;
   return <Menu.Root>
-    <Menu.Trigger className="icon-btn" aria-label={`Theme: ${theme.mode}`}><Current size={17} /></Menu.Trigger>
+    <Menu.Trigger className="icon-btn theme-trigger" aria-label={`Theme: ${theme.mode}`}><Current size={17} /></Menu.Trigger>
     <Menu.Portal><Menu.Positioner className="menu-layer" sideOffset={6} align="end"><Menu.Popup className="menu menu-compact">
       {THEMES.map(([mode, label, Icon]) => <Menu.Item key={mode} className="menu-item" onClick={() => setTheme(mode)}>
         <Icon size={15} />{label}{theme.mode === mode && <Check size={15} className="menu-check" />}
@@ -489,7 +522,7 @@ function App() {
   useEffect(() => { const pop = () => { setRoute(readRoute()); setProfile(null); setSelected(null); }; window.addEventListener('popstate', pop); return () => window.removeEventListener('popstate', pop); }, []);
   useEffect(() => {
     const titles = { how: 'How it works', explore: route.tab === 'nfts' ? 'Explore NFTs' : 'Explore collections', activity: 'Activity', claim: 'Claim an NFT', market: 'Market', listing: 'For sale', wallet: 'Wallet', offers: 'Offers' };
-    document.title = titles[route.page] ? `${titles[route.page]} · Cashu NFT` : profile?.name ? `${profile.name} · Cashu NFT` : 'Cashu NFT · The NFT is the JPG';
+    document.title = titles[route.page] ? `${titles[route.page]} · Nonfungible.cash` : profile?.name ? `${profile.name} · Nonfungible.cash` : 'Nonfungible.cash · The NFT is the JPG';
   }, [route, profile?.name]);
   useEffect(() => {
     if (!route.nft || !profile) return;
@@ -640,6 +673,12 @@ function App() {
     try { await localWallet.destroy(target); setSelected(null); await reload(); toast.success('Deleted. The NFT is burned and its picture is gone.'); }
     catch (e) { toast.error(e.message); await reload().catch(() => {}); } finally { setBusy(''); }
   };
+  const renameCard = async (target, title) => {
+    try {
+      await signedRequest(identity.secret, `/api/profiles/${identity.pubkey}/cards/${target.id}/title`, JSON.stringify({ title }), 'application/json');
+      await reload(); toast.success('Renamed.'); return true;
+    } catch (e) { toast.error(e.message); return false; }
+  };
   const cancelTransfer = async (target) => {
     setBusy('Canceling transfer');
     try { await localWallet.cancel(target); await reload(); toast.success('Transfer canceled. Every link and transfer JPG for it is now void.'); }
@@ -675,7 +714,7 @@ function App() {
   return <MotionConfig reducedMotion="user">
     <header className={`topbar ${identity ? '' : 'is-guest'}`}>
       <div className="topbar-inner">
-        <a className="brand" href="/" onClick={(e) => { e.preventDefault(); navigate('/'); }}><span className="brand-mark" aria-hidden="true" /><span className="brand-name">Cashu NFT</span></a>
+        <a className="brand" href="/" onClick={(e) => { e.preventDefault(); navigate('/'); }}><span className="brand-mark" aria-hidden="true" /><span className="brand-name">Nonfungible.cash</span></a>
         <nav className="topnav" aria-label="Main">
           {(route.page === 'profile' ? NAV.slice(0, 1) : NAV).map(([href, label, page]) =>
             <a key={href} className={`nav-link ${navActive(page) ? 'is-active' : ''} ${page === 'market' ? 'nav-market' : ''}`} aria-current={navActive(page) ? 'page' : undefined}
@@ -689,6 +728,7 @@ function App() {
               {NAV.map(([href, label, page, Icon]) => <Menu.Item key={href} className={`menu-item ${page === 'market' ? 'menu-guest-market' : ''}`} onClick={() => navigate(href)}>
                 <Icon size={15} />{label}{navActive(page) && <Check size={15} className="menu-check" />}
               </Menu.Item>)}
+              <ThemeItems theme={theme} setTheme={setTheme} />
             </Menu.Popup></Menu.Positioner></Menu.Portal>
           </Menu.Root>}
           <ThemeMenu theme={theme} setTheme={setTheme} />
@@ -708,6 +748,7 @@ function App() {
                 <Menu.Item className="menu-item" onClick={openCreate} disabled={!config}><Plus size={15} />Start another collection</Menu.Item>
                 <Menu.Item className="menu-item" onClick={() => { setName(''); setDialog('import'); }}><KeyRound size={15} />Import a key</Menu.Item>
                 <Menu.Item className="menu-item" onClick={() => setDialog('open')}><Link2 size={15} />Open by public key</Menu.Item>
+                <ThemeItems theme={theme} setTheme={setTheme} />
               </Menu.Popup></Menu.Positioner></Menu.Portal>
             </Menu.Root>
             : <Button variant="primary" size="sm" className="topbar-cta" onClick={openCreate} disabled={!config}>Get started</Button>}
@@ -896,7 +937,7 @@ function App() {
 
     <footer className="footer">
       <div className="footer-inner">
-        <span className="brand small"><span className="brand-mark" aria-hidden="true" />Cashu NFT</span>
+        <span className="brand small"><span className="brand-mark" aria-hidden="true" />Nonfungible.cash</span>
         <span className="muted">Experimental, unaudited cryptography. Pointcheval–Sanders credentials on BLS12-381.</span>
         <a className="nav-link" href="/explore" onClick={(e) => { e.preventDefault(); navigate('/explore'); }}>Explore</a>
         <a className="nav-link" href="/activity" onClick={(e) => { e.preventDefault(); navigate('/activity'); }}>Activity</a>
@@ -907,7 +948,7 @@ function App() {
 
     <Modal open={dialog === 'create' || dialog === 'import'} close={closeDialog}
       title={dialog === 'create' ? 'Create a collection' : 'Unlock a collection'}
-      description={dialog === 'create' ? 'Your collection is controlled by a private key generated in this browser. Save it now: there is no password reset.' : 'Paste the private key of an existing collection. It stays in this browser.'}>
+      description={dialog === 'create' ? 'Your collection is controlled by a private key generated in this browser. Save it now: there is no password reset.' : 'Paste the private key of an existing collection. It stays in this browser.' + (!HOME.startsWith('https://') || MOVED_FROM.includes(HOME) ? '' : ` Used ${MOVED_FROM.map((o) => new URL(o).host).join(' or ')} before? Open it in this browser once and your collection moves here.`)}>
       <form onSubmit={onboard} className="stack">
         {dialog === 'create' ? <>
           <label className="field"><span>Collection name</span><input maxLength={40} placeholder="e.g. Field recordings" value={name} onChange={(e) => setName(e.target.value)} autoFocus /></label>
@@ -916,7 +957,7 @@ function App() {
             <code className="mono">{generated}</code>
             <div className="row">
               <CopyChip value={generated} display="Copy" message="Private key copied" />
-              <Button type="button" variant="ghost" size="sm" icon={<Download size={14} />} onClick={() => download(new Blob([generated + '\n'], { type: 'text/plain' }), 'cashu-nft-private-key.txt')}>Download</Button>
+              <Button type="button" variant="ghost" size="sm" icon={<Download size={14} />} onClick={() => download(new Blob([generated + '\n'], { type: 'text/plain' }), 'nonfungible-cash-private-key.txt')}>Download</Button>
             </div>
           </div>
           <label className="ack">
@@ -943,7 +984,7 @@ function App() {
         <code className="mono">{identity?.secret}</code>
         <div className="row">
           <CopyChip value={identity?.secret || ''} display="Copy" message="Private key copied" />
-          <Button variant="ghost" size="sm" icon={<Download size={14} />} onClick={() => download(new Blob([identity.secret + '\n'], { type: 'text/plain' }), 'cashu-nft-private-key.txt')}>Download</Button>
+          <Button variant="ghost" size="sm" icon={<Download size={14} />} onClick={() => download(new Blob([identity.secret + '\n'], { type: 'text/plain' }), 'nonfungible-cash-private-key.txt')}>Download</Button>
         </div>
       </div>
     </Modal>
@@ -954,11 +995,35 @@ function App() {
 
     <Modal open={!!card} close={() => { if (!busy) setSelected(null); }} size="wide" title={card?.title}>
       {card && <CardDetail card={card} result={verification[card.id]} owner={owner} busy={busy} config={config}
-        canSend={!!localWallet && !!card.signature && card.custody === 'browser'} onSend={sendCard} onCancel={cancelTransfer} onDelete={deleteCard} isNew={card.id === fresh}
+        canSend={!!localWallet && !!card.signature && card.custody === 'browser'} onSend={sendCard} onCancel={cancelTransfer} onDelete={deleteCard} onRename={renameCard} isNew={card.id === fresh}
         market={owner ? market : null} nftWallet={localWallet} onChanged={() => reload()} navigate={navigate} />}
     </Modal>
     <Toaster theme={theme.dark ? 'dark' : 'light'} position="bottom-center" toastOptions={{ className: 'toast' }} />
   </MotionConfig>;
 }
 
-createRoot(document.getElementById('root')).render(<App />);
+/** Keys handed over from an old origin (move.jsx). Returns how many were saved. */
+function receiveKeys({ keys, active, mint }) {
+  const valid = Object.entries(keys && typeof keys === 'object' ? keys : {}).filter(([pubkey, secret]) => {
+    try { return typeof secret === 'string' && /^[0-9a-f]{64}$/.test(secret) && profileKey(secret) === pubkey; } catch { return false; }
+  });
+  if (!valid.length) return 0;
+  const mine = storedKeys();
+  local.set(KEYRING, JSON.stringify({ ...Object.fromEntries(valid), ...mine }));
+  const saved = storedKeys();
+  if (!valid.every(([pubkey]) => saved[pubkey])) return 0;
+  if (!mine[local.get(ACTIVE)]) local.set(ACTIVE, valid.some(([pubkey]) => pubkey === active) ? active : valid[0][0]);
+  if (typeof mint === 'string' && !local.get(MINT_PIN)) local.set(MINT_PIN, mint);
+  return valid.length;
+}
+const movePayload = () => ({ keys: storedKeys(), active: local.get(ACTIVE), mint: local.get(MINT_PIN) });
+const keysText = () => Object.values(storedKeys()).join('\n');
+const downloadKeys = () => download(new Blob([keysText() + '\n'], { type: 'text/plain' }), 'nonfungible-cash-private-keys.txt');
+
+const plan = movePlan(Object.keys(storedKeys()).length > 0);
+const root = createRoot(document.getElementById('root'));
+if (plan === 'redirect') redirectHome();
+else if (plan === 'offer') root.render(<MoveOffer payload={movePayload} keysText={keysText} onDownload={downloadKeys} />);
+else if (plan === 'receive') root.render(<MoveReceive save={receiveKeys} />);
+else if (plan === 'stranded') root.render(<MoveStranded />);
+else root.render(<App />);

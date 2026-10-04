@@ -62,14 +62,14 @@ def collection_meta(base: str, profile: dict) -> Dict[str, str]:
     cards = [c for c in profile["cards"] if c["status"] == "owned"]
     count = f"{len(cards)} NFT" + ("" if len(cards) == 1 else "s")
     titles = ", ".join(c["title"] for c in cards[:3] if c.get("title"))
-    description = f"{count} on Cashu NFT" + (f": {titles}" if titles else ".")
+    description = f"{count} on Nonfungible.cash" + (f": {titles}" if titles else ".")
     return page_meta(
         base,
         f"/p/{profile['pubkey']}",
-        f"{name} · Cashu NFT",
+        f"{name} · Nonfungible.cash",
         description,
         f"/api/og/p/{profile['pubkey']}.jpg?v={profile_version(profile)}",
-        f"{name}, a collection of {count} on Cashu NFT.",
+        f"{name}, a collection of {count} on Nonfungible.cash.",
     )
 
 
@@ -88,7 +88,7 @@ def link_meta(base: str, link: dict, version: str) -> Dict[str, str]:
         headline,
         description,
         f"/api/og/claim/{link['id']}.jpg?v={version}",
-        f"{title}, sent by {sender} on Cashu NFT.",
+        f"{title}, sent by {sender} on Nonfungible.cash.",
     )
 
 
@@ -106,16 +106,18 @@ def nft_meta(base: str, profile: dict, card: dict, version: str) -> Dict[str, st
     title = card.get("title") or "Untitled"
     if card["status"] == "owned":
         n = owned_count(profile)
-        description = f"One of {n} NFT{'' if n == 1 else 's'} in {name} on Cashu NFT."
+        description = (
+            f"One of {n} NFT{'' if n == 1 else 's'} in {name} on Nonfungible.cash."
+        )
     else:
-        description = f"Sent on from {name} on Cashu NFT."
+        description = f"Sent on from {name} on Nonfungible.cash."
     return page_meta(
         base,
         f"/p/{profile['pubkey']}?nft={card['id']}",
         f"{title} · {name}",
         description,
         f"/api/og/p/{profile['pubkey']}/{card['id']}.jpg?v={version}",
-        f"{title}, an NFT in {name} on Cashu NFT.",
+        f"{title}, an NFT in {name} on Nonfungible.cash.",
     )
 
 
@@ -130,22 +132,23 @@ def listing_meta(base: str, listing: dict, version: str) -> Dict[str, str]:
     bids = listing["bids"]["count"]
     if listing_open(listing):
         headline = f"{title} · {price}"
-        description = f"For sale by {seller} on Cashu NFT. Pay with Cashu ecash." + (
-            f" {bids} bid{'' if bids == 1 else 's'} so far." if bids else ""
+        description = (
+            f"For sale by {seller} on Nonfungible.cash. Pay with Cashu ecash."
+            + (f" {bids} bid{'' if bids == 1 else 's'} so far." if bids else "")
         )
     elif listing["state"] == "sold":
         headline = f"{title} · sold"
-        description = f"Sold by {seller} for {price} on Cashu NFT."
+        description = f"Sold by {seller} for {price} on Nonfungible.cash."
     else:
         headline = title
-        description = f"Listed by {seller} on Cashu NFT. No longer for sale."
+        description = f"Listed by {seller} on Nonfungible.cash. No longer for sale."
     return page_meta(
         base,
         f"/market/{listing['id']}",
         headline,
         description,
         f"/api/og/market/{listing['id']}.jpg?v={version}",
-        f"{title}, listed by {seller} on Cashu NFT.",
+        f"{title}, listed by {seller} on Nonfungible.cash.",
     )
 
 

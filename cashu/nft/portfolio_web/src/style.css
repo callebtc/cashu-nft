@@ -1,4 +1,4 @@
-/* Cashu NFT: loud, flat, tactile. Ink borders, hard shadows, no gradients, no purple. */
+/* Nonfungible.cash: loud, flat, tactile. Ink borders, hard shadows, no gradients, no purple. */
 :root {
   color-scheme: light;
   --bg: #f4f0e6;
@@ -390,6 +390,12 @@ button.nft-card:hover .nft-media img, .is-preview:hover .nft-media svg { transfo
 .detail-panel { display: flex; flex-direction: column; gap: 18px; padding: 2px 8px 8px 2px; }
 .detail-head { display: flex; flex-direction: column; align-items: flex-start; gap: 10px; padding-right: 36px; }
 .detail-head h2, .detail-panel > h2 { font-size: 38px; letter-spacing: -.045em; overflow-wrap: anywhere; }
+.title-row { display: flex; align-items: flex-start; gap: 10px; max-width: 100%; }
+.title-row h2 { min-width: 0; }
+.rename-btn { width: 34px; height: 34px; margin-top: 2px; }
+.rename-btn svg { width: 15px; height: 15px; }
+.rename { display: flex; flex-direction: column; align-items: flex-start; gap: 10px; width: 100%; }
+.rename-input.input { width: 100%; height: 52px; font-family: var(--display); font-size: 26px; font-weight: 800; letter-spacing: -.03em; }
 .checks { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; border: 2px solid var(--ink); border-radius: 16px; overflow: hidden; background: var(--paper); }
 .check-row { display: flex; gap: 12px; align-items: flex-start; padding: 12px 14px; font-size: 14px; }
 .check-row + .check-row { border-top: 2px solid var(--ink); }
@@ -638,7 +644,7 @@ button.stat { text-align: left; cursor: pointer; }
 /* Top bar breakpoints. Below 900px only Market stays in the bar and the other links
    fold into the profile menu (or, for guests, the menu button). */
 @media (min-width: 901px) { .menu-mobile { display: none; } }
-@media (min-width: 641px) { .menu-guest-market { display: none; } }
+@media (min-width: 641px) { .menu-guest-market, .menu-phone { display: none; } }
 @media (max-width: 900px) {
   .topbar .nav-link:not(.nav-market) { display: none; }
   .topnav { margin-left: 8px; }
@@ -648,14 +654,16 @@ button.stat { text-align: left; cursor: pointer; }
   .topnav { margin-left: 0; }
   .topbar-actions { gap: 6px; }
   .topbar.is-guest .topnav { display: none; }
-  .brand { gap: 9px; font-size: 20px; }
+  .topbar .theme-trigger { display: none; }
+  .brand { gap: 8px; font-size: 18px; }
   .topbar .nav-link { height: 36px; padding: 0 12px; }
   .icon-btn { width: 38px; height: 38px; }
   .profile-pill { height: 38px; padding: 0 6px; gap: 6px; }
   .profile-label { display: none; }
   .topbar-cta.btn-sm { height: 38px; padding: 0 14px; }
 }
-@media (max-width: 370px) {
+@media (max-width: 374px) { .brand { gap: 7px; font-size: 16px; } }
+@media (max-width: 345px) {
   .brand { gap: 0; }
   .brand-name { display: none; }
 }
@@ -918,3 +926,11 @@ main.page > .back { margin-bottom: 20px; }
 @media (prefers-reduced-motion: reduce) { .sk, .sk-wrap { animation: none; } }
 /* Invisible Turnstile widget for uploads: kept in the DOM so it can run, never shown. */
 .turnstile-host { position: fixed; left: 0; top: 0; width: 0; height: 0; overflow: hidden; opacity: 0; pointer-events: none; }
+
+/* Moved to a new domain (move.jsx) */
+.move { display: grid; place-items: center; min-height: 100vh; padding-top: 24px; padding-bottom: 24px; }
+.move-card { display: flex; flex-direction: column; align-items: flex-start; gap: 18px; width: 100%; max-width: 560px; padding: 36px; border-radius: 28px; border: 2px solid var(--ink); background: var(--paper); box-shadow: var(--shadow-lg); }
+.move-card h1 { font-size: clamp(34px, 6vw, 48px); letter-spacing: -.045em; }
+.move-card .lead { display: flex; align-items: center; gap: 10px; font-weight: 550; }
+.move-key { display: block; width: 100%; padding: 12px; border-radius: 12px; border: 2px solid var(--ink); background: var(--bg); white-space: pre-wrap; word-break: break-all; user-select: all; }
+@media (max-width: 640px) { .move-card { padding: 24px 20px; border-radius: 22px; } .move-card .btn-lg { width: 100%; } }

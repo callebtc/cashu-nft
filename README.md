@@ -1,6 +1,6 @@
-# Cashu NFT
+# Nonfungible.cash
 
-**The NFT is the JPG.** Cashu NFT turns any picture into a private, bearer
+**The NFT is the JPG.** [Nonfungible.cash](https://nonfungible.cash) turns any picture into a private, bearer
 collectible built on [Cashu](https://cashu.space) ecash. The ownership token
 travels inside the image file's EXIF header, so sending the JPG (by email, USB
 stick or a link) sends the NFT. There's no blockchain, no gas and no wallet
@@ -164,7 +164,7 @@ setup puts it behind a TLS reverse proxy.
    ```ini
    # /etc/systemd/system/cashu-nft.service
    [Unit]
-   Description=Cashu NFT
+   Description=Nonfungible.cash
    After=network-online.target
 
    [Service]

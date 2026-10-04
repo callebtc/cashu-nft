@@ -1,4 +1,4 @@
-# Cashu NFT marketplace implementation plan
+# Nonfungible.cash marketplace implementation plan
 
 Implement a marketplace where collectors list JPG NFTs and receive funded offers
 in ordinary Cashu ecash. Buyers may go offline after funding an offer. A seller

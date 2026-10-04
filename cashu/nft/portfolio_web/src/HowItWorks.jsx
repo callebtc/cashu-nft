@@ -108,8 +108,8 @@ export default function HowItWorks({ onStart, view = 'basics', onView }) {
       <span className="kicker">How it works</span>
       <h1>The NFT is the JPG.</h1>
       <p className="lead">{crypto
-        ? 'Most NFTs are a token on a ledger that points to an image hosted somewhere else. A Cashu NFT is a credential carried inside the image file itself. This page explains the cryptography that makes that work, with just enough math to check it.'
-        : 'Most NFTs are an entry on a public ledger that points to a picture stored somewhere else. A Cashu NFT is different: the picture carries its own ownership.'}</p>
+        ? 'Most NFTs are a token on a ledger that points to an image hosted somewhere else. An NFT on Nonfungible.cash is a credential carried inside the image file itself. This page explains the cryptography that makes that work, with just enough math to check it.'
+        : 'Most NFTs are an entry on a public ledger that points to a picture stored somewhere else. An NFT on Nonfungible.cash is different: the picture carries its own ownership.'}</p>
       <Segmented id="how" value={view} onChange={(v) => onView?.(v)} options={[['basics', 'The basics'], ['cryptography', 'Cryptography']]} />
     </header>
     {crypto ? <Cryptography onStart={onStart} /> : <Basics onStart={onStart} onCrypto={() => { onView?.('cryptography'); window.scrollTo({ top: 0, behavior: 'smooth' }); }} />}

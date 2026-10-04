@@ -177,7 +177,7 @@ export default function Basics({ onStart, onCrypto }) {
     <section className="basics-compare">
       <h2>Why we think it’s better <span className="muted">(humbly)</span></h2>
       <div className="compare-table" role="table">
-        <div className="compare-row compare-head" role="row"><span role="columnheader" /><span role="columnheader">Most NFTs</span><span role="columnheader">Cashu NFTs</span></div>
+        <div className="compare-row compare-head" role="row"><span role="columnheader" /><span role="columnheader">Most NFTs</span><span role="columnheader">Nonfungible.cash</span></div>
         {COMPARE.map(([what, them, us]) => <div key={what} className="compare-row" role="row">
           <span role="rowheader">{what}</span>
           <span role="cell" className="them"><X size={15} />{them}</span>
