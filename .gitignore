@@ -149,3 +149,6 @@ tor-data
 
 junit.xml
 googleapis/
+
+# Local agent instructions (deployment notes); never commit
+/AGENTS.md
