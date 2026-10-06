@@ -337,3 +337,24 @@ async def test_extension_signed_listing(env):  # noqa: F811
     response = await post(21, "listing")
     assert response.status_code == 200, response.text
     assert response.json()["price"] == 21
+
+
+def test_migration_only_adds_tables(client):  # noqa: F811
+    """A rollback must not need a data restore (on a live mint that would
+    forget spent NFTs): the previous release creates profiles with a
+    positional three-column insert, so the profiles table keeps its shape."""
+    db = client.app.state.portfolio.db
+    old = PublicKeyXOnly.from_secret(secrets.token_bytes(32)).format().hex()
+
+    async def previous_release():
+        async with db.get_connection() as conn:
+            columns = await conn.fetchall("PRAGMA table_info(portfolio_profiles)")
+            await conn.execute(
+                "INSERT INTO portfolio_profiles VALUES(:p,:name,:t)",
+                {"p": old, "name": "Old release", "t": int(time.time())},
+            )
+        return [c["name"] for c in columns]
+
+    assert client.portal.call(previous_release) == ["pubkey", "name", "created"]
+    profile = client.get(f"/api/profiles/{old}").json()
+    assert profile["name"] == "Old release" and profile["nostr"] is False

@@ -219,7 +219,8 @@ fixtures with event-form showings.
   `{name, vault: {ciphertext, check}}` in the existing signed
   `POST /api/profiles/{pk}`. The vault goes in its own table,
   `portfolio_vaults(pubkey, ciphertext, vault_check, updated)`, and the
-  profile row gets `nostr = 1`; the profile JSON gains `nostr`.
+  collection is recorded in `portfolio_nostr(pubkey, created)`; the profile
+  JSON gains `nostr`.
   - The vault is write-once per check value. `POST /api/profiles/{pk}/vault`
     stores it only for a Nostr collection, and only when no vault exists or
     the check value is the same. A vault sent with the create call of an
@@ -344,8 +345,8 @@ The kind 0 and kind 10002 queries run in parallel with step 4.
 - **`portfolio.py`:**
   - `authorize()` gains the event and session paths.
   - Add the session endpoints and the `portfolio_sessions` table.
-  - Add the `portfolio_vaults` table, the profile column `nostr`, and the
-    vault read and write routes.
+  - Add the `portfolio_vaults` and `portfolio_nostr` tables, and the vault
+    read and write routes.
   - Add `nostr` to the profile JSON.
 - **Relaxed signature validators** in `portfolio.py`, `portfolio_wallet.py`
   and the market models.
@@ -399,8 +400,13 @@ What the build settled differently from the first draft of this plan:
   `X-Portfolio-Signature`, instead of a kind 27235 event in a separate
   header. One verifier, one format, and a readable extension prompt.
 - **The vault has its own table.** The profile row is served publicly
-  (`SELECT *`), so the ciphertext lives in `portfolio_vaults`; the profile
-  keeps only `nostr`. Owner routes are all `POST`, so the read is `/vault/get`.
+  (`SELECT *`), so the ciphertext lives in `portfolio_vaults`. Owner routes
+  are all `POST`, so the read is `/vault/get`.
+- **The migration only adds tables.** Which collections are Nostr ones lives
+  in `portfolio_nostr`, not in a new profile column: the previous release
+  inserts profiles positionally, so it still runs on a migrated database
+  and a rollback needs no data restore (on a live mint, restoring data
+  would forget spent NFTs). A test pins the profiles table's shape.
 - **Restore lives in sign-in.** A signed-in Nostr collection always has its
   vault, so restoring is offered only where it's needed: when sign-in finds
   no copy. It adds a "start a new wallet" escape for users without a backup.

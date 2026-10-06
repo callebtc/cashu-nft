@@ -248,13 +248,13 @@ class Portfolio:
                 """CREATE TABLE IF NOT EXISTS portfolio_vaults (
                     pubkey TEXT PRIMARY KEY, ciphertext TEXT NOT NULL,
                     vault_check TEXT NOT NULL, updated INTEGER NOT NULL)""",
+                # Nostr collections. A table of its own, not a profile column,
+                # so the migration only adds tables and the previous release
+                # still runs on a migrated database.
+                """CREATE TABLE IF NOT EXISTS portfolio_nostr (
+                    pubkey TEXT PRIMARY KEY, created INTEGER NOT NULL)""",
             ):
                 await conn.execute(statement)
-            columns = await conn.fetchall("PRAGMA table_info(portfolio_profiles)")
-            if "nostr" not in {c["name"] for c in columns}:
-                await conn.execute(
-                    "ALTER TABLE portfolio_profiles ADD COLUMN nostr INTEGER NOT NULL DEFAULT 0"
-                )
 
     async def capacity(self, conn: Connection, pubkey: str, image_size: int) -> None:
         profile = await conn.fetchone(
@@ -422,9 +422,12 @@ class Portfolio:
                 "SELECT * FROM portfolio_cards WHERE pubkey=:p ORDER BY created DESC,rowid DESC",
                 {"p": pubkey},
             )
+            nostr = await conn.fetchone(
+                "SELECT pubkey FROM portfolio_nostr WHERE pubkey=:p", {"p": pubkey}
+            )
             return {
                 **dict(profile),
-                "nostr": bool(profile["nostr"]),
+                "nostr": nostr is not None,
                 "cards": [self.public_card(dict(r), owner=False) for r in rows],
             }
 
@@ -774,17 +777,16 @@ def create_portfolio_app(
                 )
                 if count is not None and count["n"] >= 1000:
                     raise HTTPException(409, "The mint has reached its profile limit.")
+                now = int(time.time())
                 await conn.execute(
-                    """INSERT INTO portfolio_profiles(pubkey,name,created,nostr)
-                    VALUES(:p,:name,:t,:nostr)""",
-                    {
-                        "p": pubkey,
-                        "name": body.name.strip() or "Collector",
-                        "t": int(time.time()),
-                        "nostr": int(body.vault is not None),
-                    },
+                    "INSERT INTO portfolio_profiles(pubkey,name,created) VALUES(:p,:name,:t)",
+                    {"p": pubkey, "name": body.name.strip() or "Collector", "t": now},
                 )
                 if body.vault is not None:
+                    await conn.execute(
+                        "INSERT INTO portfolio_nostr(pubkey,created) VALUES(:p,:t)",
+                        {"p": pubkey, "t": now},
+                    )
                     await portfolio.store_vault(conn, pubkey, body.vault)
         return await portfolio.profile(pubkey)
 
@@ -867,11 +869,14 @@ def create_portfolio_app(
             ]
         ) as conn:
             profile = await conn.fetchone(
-                "SELECT nostr FROM portfolio_profiles WHERE pubkey=:p", {"p": pubkey}
+                "SELECT pubkey FROM portfolio_profiles WHERE pubkey=:p", {"p": pubkey}
             )
             if profile is None:
                 raise HTTPException(404, "Create this collection first.")
-            if not profile["nostr"]:
+            nostr = await conn.fetchone(
+                "SELECT pubkey FROM portfolio_nostr WHERE pubkey=:p", {"p": pubkey}
+            )
+            if nostr is None:
                 raise HTTPException(409, "This collection uses its own key.")
             await portfolio.store_vault(conn, pubkey, body)
         return {"ok": True}
