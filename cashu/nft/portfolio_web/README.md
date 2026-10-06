@@ -66,6 +66,17 @@ poetry run pytest tests/test_nft_portfolio.py -q  # backend
 - **Profile keys** are secp256k1 keys generated and kept in the browser's local
   storage. They never reach the server. There is no reset: lose the key and you
   lose the profile. Use "Back up key", and "Import key" on another browser.
+- **Nostr collections** (`../NOSTR_LOGIN_PLAN.md`). A Nostr key is a profile
+  key, held by a signing extension (NIP-07) or pasted (`nsec`, or `ncryptsec`
+  with its password). The wallets of a Nostr collection derive from a random
+  wallet key instead, NIP-44-encrypted to the Nostr key and stored at the server
+  and as a kind 30078 event on the user's relays, so an extension and a pasted
+  key open the same wallets. An extension authorizes a 30-day session key for
+  owner requests with one signature, and signs showings, listings, offers and
+  acceptances as events of kind 27711 committing to the same digest
+  (`n1:<created_at>:<sig>`). Background recovery never opens a prompt: it waits
+  until the user signs. A pasted `nsec` stays in local storage like a profile
+  key; an `ncryptsec` and its wallet key only for the tab.
 - **Browser custody.** The browser constructs blind issuance and private
   transfer proofs, unblinds signatures, generates public showings, and
   embeds or extracts JPG bearer tokens. Spending secrets are encrypted in

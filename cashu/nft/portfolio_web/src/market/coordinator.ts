@@ -21,6 +21,7 @@ import { secp256k1 } from '@noble/curves/secp256k1.js';
 import { bytesToHex, hexToBytes } from '@noble/hashes/utils.js';
 import { parseShowing } from '../crypto.mjs';
 import { authorizationKey, LocalRecords, moneyKey, open, seal, type Sealed } from '../money/store.ts';
+import { isDeferred, type SignOptions, type Signer } from '../signer.ts';
 import { ORDER, integer, type Card, type Credential } from '../wallet/ps.ts';
 import type { Listing, MarketApi, MarketConfig, OfferView } from './api.ts';
 import {
@@ -35,7 +36,7 @@ declare module '@cashu/coco-core/plugin' { interface PluginExtensions { market: 
 export interface NftSide {
   rotate(card: Card): Promise<Card>;
   presentForDelivery(card: Card, binding: Uint8Array): Promise<string>;
-  importPurchased(cardId: string, cred: Credential, publish: (body: { encrypted_credential: unknown; showing: string; signature: string }) => Promise<unknown>): Promise<void>;
+  importPurchased(cardId: string, cred: Credential, publish: (body: { encrypted_credential: unknown; showing: string; signature: string }) => Promise<unknown>, opts?: SignOptions): Promise<void>;
   verify(cred: Credential): void;
 }
 
@@ -47,7 +48,7 @@ export interface BuyerRecord {
   kind: 'offer'; id: string; stage: BuyerStage; mint: string; keyset_id: string; test_value: boolean;
   manifest: OfferManifest; preimage: string; s_new: string; refund_key: string;
   inputs: WireProof[]; send: SavedOutput[]; keep: SavedOutput[];
-  htlc: WireProof[]; refund: SavedOutput[]; refund_signature: string; body?: unknown;
+  htlc: WireProof[]; refund: SavedOutput[]; refund_signature: string; buyer_signature?: string; body?: unknown;
   error?: string; created: number; updated: number;
 }
 export type SellerStage = 'prepared' | 'accepted' | 'paid' | 'failed';
@@ -75,8 +76,8 @@ function verified(wallet: Wallet, proofs: Proof[]): Proof[] {
 /** Encrypted operation journal: local IndexedDB plus server recovery records. */
 class Journal {
   private key: Promise<CryptoKey>;
-  constructor(private secret: string, private pubkey: string, private local: LocalRecords, private api: MarketApi) {
-    this.key = moneyKey(secret, 'market-journal');
+  constructor(root: string, private pubkey: string, private local: LocalRecords, private api: MarketApi) {
+    this.key = moneyKey(root, 'market-journal');
   }
   private aad = (id: string) => `Cashu_Market_Journal_v1\n${this.pubkey}\n${id}`;
   async put(record: JournalRecord): Promise<void> {
@@ -107,16 +108,18 @@ export interface MarketBalances { offerLocked: number; pendingRefund: number; pe
 
 export class MarketCoordinator {
   readonly journal: Journal;
+  readonly pubkey: string;
   private config?: MarketConfig;
   constructor(
-    private secret: string,
-    readonly pubkey: string,
+    private root: string,
+    private signer: Signer,
     private api: MarketApi,
     private services: { proofService: any; walletService: any; mintService: any },
     local: LocalRecords,
     private pins: LocalRecords,
   ) {
-    this.journal = new Journal(secret, pubkey, local, api);
+    this.pubkey = signer.pubkey;
+    this.journal = new Journal(root, this.pubkey, local, api);
   }
 
   /** Market config with trust-on-first-use pinning of the NFT mint's escrow
@@ -157,13 +160,13 @@ export class MarketCoordinator {
 
   // --- seller: listings ------------------------------------------------------
 
-  private async claimKey(listingId: string) { return authorizationKey(this.secret, `claim:${listingId}`); }
-  /** Per-offer buyer secrets derived from the profile key, so the refund key
-   *  and the new owner secret s' survive even if the journal is lost. */
+  private async claimKey(listingId: string) { return authorizationKey(this.root, `claim:${listingId}`); }
+  /** Per-offer buyer secrets derived from the profile's root secret, so the
+   *  refund key and the new owner secret s' survive even if the journal is lost. */
   private async offerKeys(offerId: string) {
-    const refundKey = await authorizationKey(this.secret, `refund:${offerId}`);
+    const refundKey = await authorizationKey(this.root, `refund:${offerId}`);
     if (!secp256k1.utils.isValidSecretKey(refundKey)) throw new Error('Derived refund key out of range');
-    const raw = BigInt('0x' + bytesToHex(await authorizationKey(this.secret, `receive:${offerId}`)));
+    const raw = BigInt('0x' + bytesToHex(await authorizationKey(this.root, `receive:${offerId}`)));
     return { refundKey, sNew: (raw % (ORDER - 1n)) + 1n };
   }
 
@@ -178,7 +181,7 @@ export class MarketCoordinator {
       nullifier: bytesToHex(shown.presentation.slice(209, 257)), nft_keyset: config.nft_keyset_id, price,
       claim_pubkey: compressedPub(await this.claimKey(listingId)), created: now(),
     };
-    return this.api.createListing(listing, signListing(listing, this.secret));
+    return this.api.createListing(listing, await signListing(listing, this.signer));
   }
 
   async revise(current: Listing, price: number): Promise<Listing> {
@@ -187,7 +190,7 @@ export class MarketCoordinator {
       v: LISTING_PROTOCOL, listing_id: current.id, revision: current.revision + 1, card_id: current.card_id, seller: this.pubkey,
       h: current.h, nullifier: current.nullifier, nft_keyset: config.nft_keyset_id, price, claim_pubkey: current.claim_pubkey, created: now(),
     };
-    return this.api.reviseListing(listing, signListing(listing, this.secret));
+    return this.api.reviseListing(listing, await signListing(listing, this.signer));
   }
 
   // --- buyer: funded offers ------------------------------------------------------
@@ -299,7 +302,7 @@ export class MarketCoordinator {
     await this.afterFunding(record, toProofs(record.send), toProofs(record.keep));
   }
 
-  private async signAndRegister(record: BuyerRecord) {
+  private async signAndRegister(record: BuyerRecord, opts?: SignOptions) {
     const config = await this.marketConfig();
     if (!record.refund.length) {
       const wallet = await this.wallet(record.mint);
@@ -308,9 +311,14 @@ export class MarketCoordinator {
       record.refund_signature = signSigAll(sigAllDigest(record.htlc, record.refund.map(blinded)), record.refund_key);
       await this.journal.put(record); // the refund authorization is durable before anyone sees the offer
     }
+    if (!record.buyer_signature) {
+      // Signed once and journaled: a retried registration reuses it.
+      record.buyer_signature = await signOffer(record.manifest, this.signer, { ...opts, id: 'offer:' + record.id });
+      await this.journal.put(record);
+    }
     const mhash = manifestHash(record.manifest);
     const body = {
-      manifest: record.manifest, buyer_signature: signOffer(record.manifest, this.secret),
+      manifest: record.manifest, buyer_signature: record.buyer_signature,
       receive_proof: proveReceive(BigInt('0x' + record.s_new), mhash),
       escrow: await escrowPreimage(config.escrow.public_key, config.escrow.version, hexToBytes(record.preimage), mhash),
       proofs: record.htlc, refund: { outputs: record.refund.map(blinded), signature: record.refund_signature },
@@ -370,7 +378,7 @@ export class MarketCoordinator {
     };
     const presentation = await nft.presentForDelivery(card, deliveryBinding(hexToBytes(offer.manifest_hash), offer.manifest.nft_destination));
     try {
-      const result = await this.api.accept(offer.id, acceptance, signAcceptance(acceptance, this.secret), presentation);
+      const result = await this.api.accept(offer.id, acceptance, await signAcceptance(acceptance, this.signer), presentation);
       record.stage = 'accepted';
       await this.journal.put(record);
       return result;
@@ -386,25 +394,27 @@ export class MarketCoordinator {
 
   // --- reconciliation (browser recovery path) -----------------------------------
 
-  /** Bring every journaled operation forward from authoritative evidence. */
-  reconcile(nft?: NftSide): Promise<{ changed: number; attention: string[] }> {
-    return this.exclusive(() => this.reconcileAll(nft));
+  /** Bring every journaled operation forward from authoritative evidence.
+   *  Background runs pass `interactive: false`: a step that needs a prompt
+   *  waits for the signer instead (signer.ts `SignatureDeferred`). */
+  reconcile(nft?: NftSide, opts?: SignOptions): Promise<{ changed: number; attention: string[] }> {
+    return this.exclusive(() => this.reconcileAll(nft, opts));
   }
 
-  private async reconcileAll(nft?: NftSide): Promise<{ changed: number; attention: string[] }> {
+  private async reconcileAll(nft?: NftSide, opts?: SignOptions): Promise<{ changed: number; attention: string[] }> {
     let changed = 0;
     const attention: string[] = [];
     for (const record of await this.journal.all()) {
       const before = record.stage;
       try {
-        if (record.kind === 'offer') await this.reconcileOffer(record, nft);
+        if (record.kind === 'offer') await this.reconcileOffer(record, nft, opts);
         else await this.reconcileSale(record);
         // Self-heal wallets whose settled proofs were saved under an untrusted mint.
         if (['paid', 'refunded'].includes(record.stage)) await this.trust(record.mint);
-      } catch (error) { attention.push(`${record.id}: ${(error as Error).message}`); }
+      } catch (error) { if (!isDeferred(error)) attention.push(`${record.id}: ${(error as Error).message}`); }
       if (record.stage !== before) changed++;
     }
-    if (nft) changed += await this.recoverOrphanPurchases(nft, attention);
+    if (nft) changed += await this.recoverOrphanPurchases(nft, attention, opts);
     return { changed, attention };
   }
 
@@ -421,21 +431,21 @@ export class MarketCoordinator {
     await this.save(record.mint, verified(wallet, proofs), 'market:' + record.id);
   }
 
-  private async reconcileOffer(record: BuyerRecord, nft?: NftSide) {
+  private async reconcileOffer(record: BuyerRecord, nft?: NftSide, opts?: SignOptions) {
     if (record.stage === 'intent') {
       // Coco's startup recovery releases reservations it doesn't own; hold
       // the inputs again until the outcome is known.
       for (const p of record.inputs) await this.services.proofService.reserveProofs(record.mint, [p.secret], 'market:' + record.id).catch(() => {});
       await this.recoverFunding(record);
     }
-    if (record.stage === 'funded') await this.signAndRegister(record);
+    if (record.stage === 'funded') await this.signAndRegister(record, opts);
     if (record.stage === 'registered') {
       const offer = await this.api.offer(record.id);
       if (offer.cash_leg === 'refunded') {
         const result = await this.api.payment(record.id, 'refund');
         if (result.signatures) { await this.importOutputs(record, record.refund, result.signatures); record.stage = 'refunded'; await this.journal.put(record); }
       } else if (offer.nft_leg === 'delivered' && offer.publication !== 'published' && nft) {
-        await this.recoverPurchase(record, nft);
+        await this.recoverPurchase(record, nft, true, opts);
       } else if (offer.nft_leg === 'delivered' && offer.publication === 'published') {
         record.stage = 'purchased'; await this.journal.put(record);
       }
@@ -464,8 +474,8 @@ export class MarketCoordinator {
   }
 
   /** Purchases without a journal record (journal lost): s' is re-derived
-   *  from the profile key and the offer id; the receipt does the rest. */
-  private async recoverOrphanPurchases(nft: NftSide, attention: string[]): Promise<number> {
+   *  from the root secret and the offer id; the receipt does the rest. */
+  private async recoverOrphanPurchases(nft: NftSide, attention: string[], opts?: SignOptions): Promise<number> {
     let recovered = 0;
     const known = new Set((await this.journal.all()).filter((r) => r.kind === 'offer').map((r) => r.id));
     let purchases: { id: string; publication: string }[] = [];
@@ -477,14 +487,14 @@ export class MarketCoordinator {
         const { sNew } = await this.offerKeys(p.id);
         const record = { id: p.id, manifest: offer.manifest, s_new: bytesToHex(integer(sNew)) } as BuyerRecord;
         if (receiveCommitment(sNew) !== offer.manifest.nft_destination) throw new Error('This purchase was made with a different key');
-        await this.recoverPurchase(record, nft, false);
+        await this.recoverPurchase(record, nft, false, opts);
         recovered++;
-      } catch (error) { attention.push(`${p.id}: ${(error as Error).message}`); }
+      } catch (error) { if (!isDeferred(error)) attention.push(`${p.id}: ${(error as Error).message}`); }
     }
     return recovered;
   }
 
-  async recoverPurchase(record: BuyerRecord, nft: NftSide, journaled = true) {
+  async recoverPurchase(record: BuyerRecord, nft: NftSide, journaled = true, opts?: SignOptions) {
     const config = await this.marketConfig();
     const { receipt, signature, receipt_key } = await this.api.receipt(record.id);
     if (receipt_key !== config.receipt.public_key || !verifyReceipt(receipt, signature, config.receipt.public_key)) throw new Error('Delivery receipt is not signed by the pinned NFT mint key');
@@ -493,7 +503,7 @@ export class MarketCoordinator {
     }
     const cred: Credential = { u: receipt.u, v: receipt.v_, h: receipt.h, s: record.s_new, keyset_id: receipt.nft_keyset };
     nft.verify(cred); // a receipt is not delivery until the credential verifies
-    await nft.importPurchased(record.id, cred, (body) => this.api.publishPurchase(record.id, body));
+    await nft.importPurchased(record.id, cred, (body) => this.api.publishPurchase(record.id, body), opts);
     if (!journaled) return;
     record.stage = 'purchased';
     await this.journal.put(record);
@@ -523,11 +533,11 @@ export class MarketCoordinator {
   }
 }
 
-export function marketPlugin(secret: string, pubkey: string, api: MarketApi, local: LocalRecords, pins: LocalRecords, onReady: (c: MarketCoordinator) => void): Plugin<['proofService', 'walletService', 'mintService']> {
+export function marketPlugin(root: string, signer: Signer, api: MarketApi, local: LocalRecords, pins: LocalRecords, onReady: (c: MarketCoordinator) => void): Plugin<['proofService', 'walletService', 'mintService']> {
   return {
     name: 'cashu-nft-market', required: ['proofService', 'walletService', 'mintService'],
     onReady: ({ services, registerExtension }) => {
-      const coordinator = new MarketCoordinator(secret, pubkey, api, services, local, pins);
+      const coordinator = new MarketCoordinator(root, signer, api, services, local, pins);
       registerExtension('market', coordinator);
       onReady(coordinator);
     },

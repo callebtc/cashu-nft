@@ -11,7 +11,6 @@ import time
 import uuid
 from typing import TYPE_CHECKING, Awaitable, Callable, Literal, Optional
 
-from coincurve import PublicKeyXOnly
 from fastapi import HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 from starlette.concurrency import run_in_threadpool
@@ -25,6 +24,7 @@ from .api import (
     _parse_proof,
 )
 from .ledger import AlreadyMintedError, AlreadySpentError
+from .nostr_sig import PROFILE_SIG, verify_signature
 from .portfolio_image import normalize_image, split_transfer, validate_image
 from .wallet import NFTClient
 
@@ -73,7 +73,7 @@ class PublishRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     encrypted_credential: Envelope
     showing: str = Field(max_length=4096)
-    signature: str = Field(pattern=r"^[0-9a-f]{128}$")
+    signature: str = Field(pattern=PROFILE_SIG)
 
 
 class BrowserPortfolio:
@@ -502,9 +502,11 @@ class BrowserPortfolio:
 
     @staticmethod
     def _verify_claim(pubkey: str, signature: str, showing: str) -> bool:
-        return PublicKeyXOnly(bytes.fromhex(pubkey)).verify(
-            bytes.fromhex(signature),
+        return verify_signature(
+            pubkey,
+            "claim",
             hashlib.sha256((CLAIM_DOMAIN + showing).encode()).digest(),
+            signature,
         )
 
     async def recover(self, pubkey: str) -> dict:

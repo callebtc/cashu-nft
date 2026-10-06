@@ -19,7 +19,7 @@ export function ago(seconds) {
 }
 
 export async function socialPost(identity, path, body) {
-  const response = await signedRequest(identity.secret, `/api/profiles/${identity.pubkey}${path}`, JSON.stringify(body), 'application/json');
+  const response = await signedRequest(identity.signer, `/api/profiles/${identity.pubkey}${path}`, JSON.stringify(body), 'application/json');
   return response.json();
 }
 
@@ -250,7 +250,7 @@ const MAX_AVATAR_BYTES = 5 * 1024 * 1024;
 
 /** Downscale in the browser (512 px JPG) so uploads stay small; the server
  *  re-encodes to its final 256 px square. */
-async function shrinkPicture(file) {
+export async function shrinkPicture(file) {
   if (file.size > MAX_AVATAR_BYTES) throw new Error('Pick a picture up to 5 MB.');
   const bitmap = await createImageBitmap(file, { imageOrientation: 'from-image' }).catch(() => { throw new Error('This picture can’t be read. Try a JPG or PNG.'); });
   const scale = Math.min(1, 512 / Math.min(bitmap.width, bitmap.height));
@@ -263,7 +263,7 @@ async function shrinkPicture(file) {
 }
 
 export function EditCollectionDialog({ open, close, profile, identity, onSaved }) {
-  const [name, setName] = useState(''), [cover, setCover] = useState(''), [saving, setSaving] = useState(false);
+  const [name, setName] = useState(''), [cover, setCover] = useState(''), [saving, setSaving] = useState(false), [importing, setImporting] = useState(false);
   const [picture, setPicture] = useState(null), [removePicture, setRemovePicture] = useState(false), [pictureError, setPictureError] = useState('');
   const fileRef = useRef(null);
   const active = profile?.cards.filter((c) => c.status !== 'sent') || [];
@@ -278,14 +278,26 @@ export function EditCollectionDialog({ open, close, profile, identity, onSaved }
     catch (e) { setPictureError(e.message); }
   };
   const hasPicture = picture || (profile?.avatar && !removePicture);
+  // Nostr collections can pull their Nostr name and picture again.
+  const importNostr = async () => {
+    setImporting(true); setPictureError('');
+    try {
+      const nostr = await import('./nostr.ts'), found = await nostr.lookup(identity.pubkey);
+      if (!found.name && !found.picture) { toast('No Nostr profile found on your relays.'); return; }
+      if (found.name) setName(found.name);
+      const blob = await nostr.fetchPicture(found.picture);
+      if (blob) await choose(blob);
+      else if (found.picture) setPictureError('Your Nostr picture can’t be loaded here. Upload it instead.');
+    } catch (e) { toast.error(e.message); } finally { setImporting(false); }
+  };
   const save = async (event) => {
     event.preventDefault();
     setSaving(true);
     try {
       let updated;
       const base = `/api/profiles/${identity.pubkey}`;
-      if (picture) updated = await (await signedRequest(identity.secret, `${base}/avatar`, picture.bytes, 'image/jpeg', '', await uploadHeaders())).json();
-      else if (removePicture && profile?.avatar) updated = await (await signedRequest(identity.secret, `${base}/avatar/remove`)).json();
+      if (picture) updated = await (await signedRequest(identity.signer, `${base}/avatar`, picture.bytes, 'image/jpeg', '', await uploadHeaders())).json();
+      else if (removePicture && profile?.avatar) updated = await (await signedRequest(identity.signer, `${base}/avatar/remove`)).json();
       updated = await socialPost(identity, '/settings', { name: name.trim(), cover });
       setAvatarVersion(identity.pubkey, updated.avatar);
       onSaved(updated); toast.success('Profile updated.'); close();
@@ -293,6 +305,8 @@ export function EditCollectionDialog({ open, close, profile, identity, onSaved }
   };
   return <Modal open={open} close={() => { if (!saving) close(); }} title="Edit profile" description="Your name, picture and cover.">
     <form className="stack" onSubmit={save}>
+      {profile?.nostr && <Button type="button" variant="secondary" size="sm" className="nostr-import" onClick={importNostr} disabled={saving || importing}
+        icon={importing ? <Spinner size={14} /> : <ArrowDownToLine size={14} />}>Import name and picture from Nostr</Button>}
       <div className="field"><span>Picture</span>
         <div className="avatar-edit">
           <span className="avatar-preview">

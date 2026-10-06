@@ -5,7 +5,8 @@ import type { Plugin } from '@cashu/coco-core/plugin';
 import { hmac } from '@noble/hashes/hmac.js';
 import { sha256 } from '@noble/hashes/sha2.js';
 import { bytesToHex, concatBytes } from '@noble/hashes/utils.js';
-import { profileKey, parseShowing } from '../crypto.mjs';
+import { parseShowing } from '../crypto.mjs';
+import { asProfile, type Profile, type SignOptions, type Signer } from '../signer.ts';
 import { checked, signedRequest } from '../api.mjs';
 import { uploadHeaders } from '../turnstile.mjs';
 import { EncryptedVault, walletSeed, type Envelope } from './vault.ts';
@@ -23,14 +24,19 @@ declare module '@cashu/coco-core/plugin' { interface PluginExtensions { nft: Bro
 export class BrowserNFTWallet {
   readonly pubkey: string;
   private base: string;
-  constructor(private secret: string, readonly config: MintConfig, private vault: EncryptedVault, private nextCounter: () => Promise<number>, private seed: Uint8Array) {
-    this.pubkey = profileKey(secret);
+  constructor(private signer: Signer, readonly config: MintConfig, private vault: EncryptedVault, private nextCounter: () => Promise<number>, private seed: Uint8Array) {
+    this.pubkey = signer.pubkey;
     this.base = `/api/profiles/${this.pubkey}/wallet`;
   }
   private async post(path: string, body: object | Uint8Array = new Uint8Array(), headers: Record<string, string> = {}) {
     const binary = body instanceof Uint8Array;
     const bytes = binary ? Uint8Array.from(body as Uint8Array) : utf8(JSON.stringify(body));
-    return (await signedRequest(this.secret, this.base + path, bytes, binary ? 'application/octet-stream' : 'application/json', '', headers)).json();
+    return (await signedRequest(this.signer, this.base + path, bytes, binary ? 'application/octet-stream' : 'application/json', '', headers)).json();
+  }
+  /** A new sign-in to the same collection (a fresh session key) signs from now on. */
+  useSigner(signer: Signer) {
+    if (signer.pubkey !== this.pubkey) throw new Error('This wallet belongs to another collection');
+    this.signer = signer;
   }
   private async lock<T>(fn: () => Promise<T>): Promise<T> {
     if (!globalThis.navigator?.locks) throw new Error('This browser needs Web Locks to safely use the NFT wallet');
@@ -98,7 +104,19 @@ export class BrowserNFTWallet {
     await this.post(`/operations/${job.id}/backup`, envelope);
     return this.execute(job);
   }
-  private async execute(job: Job): Promise<Card> {
+  /** The signed public card for a credential, made once: a retried publish
+   *  reuses it rather than asking the signer again. */
+  private async signedCard(id: string, cred: Credential, opts?: SignOptions): Promise<{ showing: string; signature: string }> {
+    const saved = await this.vault.get(id);
+    if (saved) {
+      const card = await this.vault.decrypt<{ showing: string; signature: string }>(saved, id).catch(() => null);
+      if (card && bytesToHex(parseShowing(card.showing).presentation.slice(209, 257)) === nullifier(cred)) return card;
+    }
+    const card = await publicCard(cred, this.signer, { ...opts, id });
+    await this.vault.put(id, await this.vault.encrypt(card, id));
+    return card;
+  }
+  private async execute(job: Job, opts?: SignOptions): Promise<Card> {
     if (job.request.version !== 3 && (!job.t || (job.request.version !== 2 && !job.u))) throw new Error('Missing legacy unblinding material');
     const response = await this.post(`/operations/${job.id}/finish`, job.request);
     const cred = job.request.version === 3
@@ -109,11 +127,13 @@ export class BrowserNFTWallet {
     await this.unspent(cred);
     const encrypted = await this.vault.encrypt(cred, scope(job.cardId, cred.h));
     await this.vault.put('card:' + job.cardId, encrypted);
-    const card = await this.post(`/operations/${job.id}/publish`, { encrypted_credential: encrypted, ...publicCard(cred, this.secret, this.pubkey) });
+    const card = await this.post(`/operations/${job.id}/publish`, { encrypted_credential: encrypted, ...await this.signedCard('published:' + job.id, cred, opts) });
     await this.vault.remove('operation:' + job.id);
+    await this.vault.remove('published:' + job.id);
     return card;
   }
-  async recover(): Promise<{ cards: number; operations: number; discarded: number }> {
+  /** Pass `interactive: false` from background work (signer.ts `SignOptions`). */
+  async recover(opts?: SignOptions): Promise<{ cards: number; operations: number; discarded: number }> {
     return this.lock(async () => {
       const backups: { cards: { id: string; h: string; encrypted_credential: Envelope }[]; operations: { id: string; backup: Envelope; state: string; kind: string; created: number }[] } = await this.post('/recover');
       let discarded = 0;
@@ -127,7 +147,7 @@ export class BrowserNFTWallet {
         const job = await this.vault.decrypt<Job>(op.backup, 'operation:' + op.id);
         if (job.id !== op.id) throw new Error('Wallet recovery operation mismatch');
         await this.vault.put('operation:' + op.id, op.backup);
-        try { await this.execute(job); }
+        try { await this.execute(job, opts); }
         catch (error) {
           // Never discard an issued credential. A prepared job can expire,
           // or lose a transfer race, without ever obtaining a signature.
@@ -191,13 +211,14 @@ export class BrowserNFTWallet {
   verify(cred: Credential) { verifyCredential(cred, this.config); }
   /** Save a purchased credential (recovered from the delivery receipt and the
    *  buyer's own s') encrypted, then publish the ordinary signed showing. */
-  async importPurchased(cardId: string, cred: Credential, publish: (body: { encrypted_credential: Envelope; showing: string; signature: string }) => Promise<unknown>): Promise<void> {
+  async importPurchased(cardId: string, cred: Credential, publish: (body: { encrypted_credential: Envelope; showing: string; signature: string }) => Promise<unknown>, opts?: SignOptions): Promise<void> {
     return this.lock(async () => {
       verifyCredential(cred, this.config);
       await this.unspent(cred);
       const encrypted = await this.vault.encrypt(cred, scope(cardId, cred.h));
       await this.vault.put('card:' + cardId, encrypted);
-      await publish({ encrypted_credential: encrypted, ...publicCard(cred, this.secret, this.pubkey) });
+      await publish({ encrypted_credential: encrypted, ...await this.signedCard('published:purchase:' + cardId, cred, opts) });
+      await this.vault.remove('published:purchase:' + cardId);
     });
   }
   /** Delete for good: the mint burns the credential (pending links and
@@ -216,21 +237,29 @@ export class BrowserNFTWallet {
     });
   }
 }
-const opened = new Map<string, Promise<{ manager: Manager; wallet: BrowserNFTWallet }>>();
-export function openWallet(secret: string, config: MintConfig) {
-  const pubkey = profileKey(secret), id = pubkey + ':' + config.keyset_id;
-  if (!opened.has(id)) opened.set(id, (async () => {
+type Opened = Promise<{ manager: Manager; wallet: BrowserNFTWallet }>;
+const opened = new Map<string, { root: string; ready: Opened }>();
+/** `profile` is a signer.ts Profile, or a raw key for a collection that uses its own key.
+ *  One wallet per collection stays open; it always signs with the latest signer. */
+export function openWallet(profile: string | Profile, config: MintConfig): Opened {
+  const { pubkey, signer, root } = asProfile(profile), id = pubkey + ':' + config.keyset_id;
+  const cached = opened.get(id);
+  if (cached?.root === root) return cached.ready.then((open) => { open.wallet.useSigner(signer); return open; });
+  // Another wallet root for this collection (a restored or new wallet key): start over.
+  const previous = cached?.ready.then(({ manager }) => manager.dispose()).catch(() => {});
+  const ready: Opened = (async () => {
+    await previous;
     // Coco's IndexedDB storage needs IndexedDB; without it (e.g. Safari
     // Lockdown Mode) the wallet runs in memory and recovers from its
     // encrypted server backups on every open.
     const repos = (await onDeviceStorage()) ? new IndexedDbRepositories({ name: 'cashu-nft-coco-v2:' + id }) : new MemoryRepositories();
     await repos.init();
-    const seed = await walletSeed(secret, config.keyset_id), vault = new EncryptedVault(secret, config.keyset_id);
+    const seed = await walletSeed(root, config.keyset_id), vault = new EncryptedVault(root, pubkey, config.keyset_id);
     let wallet: BrowserNFTWallet | undefined;
     const plugin: Plugin<['counterService']> = {
       name: 'cashu-ps-nft', required: ['counterService'],
       onReady: ({ services, registerExtension }) => {
-        wallet = new BrowserNFTWallet(secret, config, vault, async () => {
+        wallet = new BrowserNFTWallet(signer, config, vault, async () => {
           const counter = await services.counterService.incrementCounter(location.origin, 'psnft:' + config.keyset_id, 1);
           return counter.counter;
         }, seed);
@@ -241,6 +270,15 @@ export function openWallet(secret: string, config: MintConfig) {
     const manager = await initializeCoco({ repo: repos, seedGetter: async () => seed, plugins: [plugin], watchers: { mintOperationWatcher: { disabled: true }, proofStateWatcher: { disabled: true }, meltQuoteWatcher: { disabled: true } }, processors: { mintOperationProcessor: { disabled: true }, meltSettlementProcessor: { disabled: true } } });
     if (!wallet || manager.ext.nft !== wallet) throw new Error('The coco NFT wallet did not initialize');
     return { manager, wallet };
-  })().catch(error => { opened.delete(id); throw error; }));
-  return opened.get(id)!;
+  })().catch(error => { if (opened.get(id)?.ready === ready) opened.delete(id); throw error; });
+  opened.set(id, { root, ready });
+  return ready;
+}
+/** Closes and forgets the open NFT wallets of a collection (log out). */
+export async function closeWallet(pubkey: string) {
+  for (const [id, { ready }] of [...opened]) {
+    if (!id.startsWith(pubkey + ':')) continue;
+    opened.delete(id);
+    await ready.then(({ manager }) => manager.dispose()).catch(() => {});
+  }
 }

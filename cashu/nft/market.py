@@ -28,7 +28,6 @@ import time
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Literal, Optional, Tuple
 
-from coincurve import PublicKeyXOnly
 from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel, ConfigDict, Field, StrictInt, StrictStr, ValidationError
 
@@ -43,6 +42,7 @@ from . import market_cash
 from . import market_protocol as mp
 from .ledger import NFTContract, NFTError
 from .market_net import GuardedMintClient, MintNetPolicy
+from .nostr_sig import PROFILE_SIG, verify_signature
 from .wallet import NFTClient
 
 log = logging.getLogger(__name__)
@@ -148,7 +148,7 @@ class HtlcProof(BaseModel):
 
 class ListingRequest(Strict):
     listing: ListingManifest
-    signature: StrictStr = Field(pattern=SIG)
+    signature: StrictStr = Field(pattern=PROFILE_SIG)
 
 
 class RefundAuthorization(Strict):
@@ -158,7 +158,7 @@ class RefundAuthorization(Strict):
 
 class OfferRequest(Strict):
     manifest: OfferManifest
-    buyer_signature: StrictStr = Field(pattern=SIG)
+    buyer_signature: StrictStr = Field(pattern=PROFILE_SIG)
     receive_proof: StrictStr = Field(pattern=r"^[0-9a-f]{128}$")
     escrow: Dict[str, StrictStr]
     proofs: List[HtlcProof] = Field(min_length=1, max_length=64)
@@ -176,7 +176,7 @@ class Acceptance(Strict):
 
 class AcceptRequest(Strict):
     acceptance: Acceptance
-    seller_signature: StrictStr = Field(pattern=SIG)
+    seller_signature: StrictStr = Field(pattern=PROFILE_SIG)
     presentation: StrictStr = Field(pattern=r"^[0-9a-f]{642}$")
 
 
@@ -202,7 +202,7 @@ class LeaseRequest(Strict):
 class PublishPurchase(Strict):
     encrypted_credential: Dict[str, Any]
     showing: StrictStr = Field(max_length=4096)
-    signature: StrictStr = Field(pattern=SIG)
+    signature: StrictStr = Field(pattern=PROFILE_SIG)
 
 
 def _now() -> int:
@@ -1543,9 +1543,11 @@ class Market:
             or not verify_showing(self.ledger.keyset, pres, context)
         ):
             raise HTTPException(403, "Invalid ownership showing.")
-        if not PublicKeyXOnly(bytes.fromhex(buyer)).verify(
-            bytes.fromhex(body.signature),
+        if not verify_signature(
+            buyer,
+            "claim",
             hashlib.sha256((CLAIM_DOMAIN + body.showing).encode()).digest(),
+            body.signature,
         ):
             raise HTTPException(403, "Invalid profile signature.")
         if await self.ledger.is_spent(pres.nullifier.format()):

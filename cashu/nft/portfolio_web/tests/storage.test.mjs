@@ -7,6 +7,7 @@ import { local, onDeviceStorage, openRecordStore } from '../src/storage.ts';
 import { EncryptedVault } from '../src/wallet/vault.ts';
 import { EncryptedRepositories } from '../src/money/store.ts';
 import { openWallet } from '../src/wallet/index.ts';
+import { profileKey } from '../src/crypto.mjs';
 
 const fixture = JSON.parse(readFileSync(new URL('./fixtures/wallet.json', import.meta.url)));
 const secret = '66'.repeat(32);
@@ -27,7 +28,7 @@ test('without IndexedDB, storage falls back to memory', async () => {
 });
 
 test('the credential vault works in memory', async () => {
-  const vault = new EncryptedVault(secret, fixture.config.keyset_id);
+  const vault = new EncryptedVault(secret, profileKey(secret), fixture.config.keyset_id);
   const envelope = await vault.encrypt({ hello: 'world' }, 'scope');
   await vault.put('one', envelope);
   assert.deepEqual(await vault.decrypt(await vault.get('one'), 'scope'), { hello: 'world' });
@@ -41,7 +42,7 @@ test('in memory, the ecash wallet pushes every change to its server backup', asy
     async get() { return backup; },
     async put(_device, base, revision, envelope) { assert.equal(base, backup.revision); backup = { revision, envelope }; pushes++; return { revision }; },
   };
-  const repos = await EncryptedRepositories.open(secret, remote);
+  const repos = await EncryptedRepositories.open(secret, profileKey(secret), remote);
   assert.equal(repos.ephemeral, true);
   assert.equal(await repos.acquireLease(), true);
   await repos.counterRepository.setCounter('https://mint.test', 'keyset', 7);
@@ -51,7 +52,7 @@ test('in memory, the ecash wallet pushes every change to its server backup', asy
   await repos.close();
 
   // A fresh visit has nothing locally and restores from the backup.
-  const again = await EncryptedRepositories.open(secret, remote);
+  const again = await EncryptedRepositories.open(secret, profileKey(secret), remote);
   assert.equal((await again.counterRepository.getCounter('https://mint.test', 'keyset')).counter, 7);
   await again.close();
 });

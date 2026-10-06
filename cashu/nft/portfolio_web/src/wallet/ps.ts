@@ -3,7 +3,8 @@ import { BLS_FR_ORDER, createRandomBlsSecretKey, pointFromHexG1, pointFromHexG2,
 import { bls12_381 as bls } from '@noble/curves/bls12-381.js';
 import { sha256 } from '@noble/hashes/sha2.js';
 import { bytesToHex, hexToBytes, concatBytes } from '@noble/hashes/utils.js';
-import { expectedContext, signClaim, validateKeyset, verifyCard } from '../crypto.mjs';
+import { claimDigest, expectedContext, validateKeyset, verifyCard } from '../crypto.mjs';
+import type { SignOptions, Signer } from '../signer.ts';
 
 export const ORDER = BLS_FR_ORDER;
 export const utf8 = (s: string) => new TextEncoder().encode(s);
@@ -156,7 +157,7 @@ export function decodeToken(token: string): Credential {
   pointFromHexG1(cred.u); pointFromHexG1(cred.v); scalar(cred.h); scalar(cred.s, true);
   return cred;
 }
-export function publicCard(cred: Credential, secret: string, pubkey: string) {
-  const proof = showing(cred, pubkey);
-  return { showing: proof, signature: signClaim(secret, proof) };
+export async function publicCard(cred: Credential, signer: Signer, opts?: SignOptions) {
+  const proof = showing(cred, signer.pubkey);
+  return { showing: proof, signature: await signer.sign('claim', claimDigest(proof), opts) };
 }

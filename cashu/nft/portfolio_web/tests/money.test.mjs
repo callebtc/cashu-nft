@@ -7,6 +7,7 @@ import { installCocoCompat } from '../src/money/compat.ts';
 import { EncryptedRepositories, decode, encode, moneySeed, snapshotOf } from '../src/money/store.ts';
 import { canonical, fundingAmount, sigAllDigest } from '../src/market/protocol.ts';
 import { normalizeMintUrl } from '../src/money/wallet.ts';
+import { profileKey } from '../src/crypto.mjs';
 
 const secret = '55'.repeat(32);
 
@@ -21,7 +22,7 @@ test('snapshot codec keeps Coco value types', () => {
 });
 
 test('encrypted repositories persist, reopen and never store plaintext', async () => {
-  const repos = await EncryptedRepositories.open(secret, null);
+  const repos = await EncryptedRepositories.open(secret, profileKey(secret), null);
   await repos.counterRepository.setCounter('https://mint.test', 'keyset', 42);
   const quote = { mintUrl: 'https://mint.test', method: 'bolt11', quoteId: 'q1', quote: 'q1', request: 'lnbc1', unit: 'sat',
     amount: Amount.from(5), amountPaid: Amount.from(0), amountIssued: Amount.from(0), state: 'UNPAID', reusable: false, remoteUpdatedAt: null, createdAt: 1, updatedAt: 1 };
@@ -30,11 +31,11 @@ test('encrypted repositories persist, reopen and never store plaintext', async (
   assert.ok(await repos.mintQuoteRepository.getMintQuote('https://mint.test', 'bolt11', 'q1'));
   assert.ok(repos.revision > 0);
   await repos.close();
-  const again = await EncryptedRepositories.open(secret, null);
+  const again = await EncryptedRepositories.open(secret, profileKey(secret), null);
   assert.equal((await again.counterRepository.getCounter('https://mint.test', 'keyset')).counter, 42);
   assert.ok(await again.mintQuoteRepository.getMintQuote('https://mint.test', 'bolt11', 'q1'));
   await again.close();
-  await assert.rejects(EncryptedRepositories.open('66'.repeat(32), null).then(async (r) => {
+  await assert.rejects(EncryptedRepositories.open('66'.repeat(32), profileKey('66'.repeat(32)), null).then(async (r) => {
     // Another key sees nothing usable (separate database) and cannot decrypt ours.
     assert.equal(await r.counterRepository.getCounter('https://mint.test', 'keyset'), null);
     await r.close(); throw new Error('isolated');

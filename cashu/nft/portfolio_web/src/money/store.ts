@@ -11,7 +11,6 @@
 import { Amount } from '@cashu/cashu-ts';
 import { MemoryRepositories } from '@cashu/coco-core';
 import { hexToBytes, bytesToHex } from '@noble/hashes/utils.js';
-import { profileKey } from '../crypto.mjs';
 import { local, openRecordStore, type RecordStore } from '../storage.ts';
 
 const enc = new TextEncoder();
@@ -89,27 +88,28 @@ export function restoreInto(repos: MemoryRepositories, snapshot: Encoded): void 
 
 // --- keys -------------------------------------------------------------------------
 
-async function hkdfMaterial(secret: string) {
-  return crypto.subtle.importKey('raw', copy(hexToBytes(secret)), 'HKDF', false, ['deriveBits', 'deriveKey']);
+// `root` is the profile's HKDF root (signer.ts `Profile.root`).
+async function hkdfMaterial(root: string) {
+  return crypto.subtle.importKey('raw', copy(hexToBytes(root)), 'HKDF', false, ['deriveBits', 'deriveKey']);
 }
 const SALT = () => copy(enc.encode('Cashu_Money_v1'));
 
 /** Domain-separated, profile-scoped and independent of the NFT keyset. */
-export async function moneySeed(secret: string): Promise<Uint8Array> {
+export async function moneySeed(root: string): Promise<Uint8Array> {
   return new Uint8Array(await crypto.subtle.deriveBits(
-    { name: 'HKDF', hash: 'SHA-256', salt: SALT(), info: copy(enc.encode('Cashu_Money_Seed_v1')) }, await hkdfMaterial(secret), 512));
+    { name: 'HKDF', hash: 'SHA-256', salt: SALT(), info: copy(enc.encode('Cashu_Money_Seed_v1')) }, await hkdfMaterial(root), 512));
 }
 
 /** Separate signing keys for operation authorizations (HTLC refunds/claims). */
-export async function authorizationKey(secret: string, label: string): Promise<Uint8Array> {
+export async function authorizationKey(root: string, label: string): Promise<Uint8Array> {
   return new Uint8Array(await crypto.subtle.deriveBits(
-    { name: 'HKDF', hash: 'SHA-256', salt: SALT(), info: copy(enc.encode(`Cashu_Money_Authorization_v1/${label}`)) }, await hkdfMaterial(secret), 256));
+    { name: 'HKDF', hash: 'SHA-256', salt: SALT(), info: copy(enc.encode(`Cashu_Money_Authorization_v1/${label}`)) }, await hkdfMaterial(root), 256));
 }
 
-export async function moneyKey(secret: string, purpose: string): Promise<CryptoKey> {
+export async function moneyKey(root: string, purpose: string): Promise<CryptoKey> {
   return crypto.subtle.deriveKey(
     { name: 'HKDF', hash: 'SHA-256', salt: SALT(), info: copy(enc.encode(`Cashu_Money_Encryption_v1/${purpose}`)) },
-    await hkdfMaterial(secret), { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
+    await hkdfMaterial(root), { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
 }
 
 export interface Sealed { version: string; nonce: string; ciphertext: string }
@@ -167,11 +167,10 @@ export class EncryptedRepositories extends MemoryRepositories {
   private dirtyRemote = false;
   private leaseUntil = 0;
 
-  static async open(secret: string, remote: RemoteBackup | null): Promise<EncryptedRepositories> {
-    const pubkey = profileKey(secret);
+  static async open(root: string, pubkey: string, remote: RemoteBackup | null): Promise<EncryptedRepositories> {
     const repos = new EncryptedRepositories();
     repos.local = new LocalRecords(pubkey);
-    repos.key = await moneyKey(secret, 'snapshot');
+    repos.key = await moneyKey(root, 'snapshot');
     repos.aad = `Cashu_Money_Snapshot_v1\n${pubkey}`;
     repos.remote = remote;
     repos.ephemeral = !(await repos.local.persistent());

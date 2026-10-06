@@ -90,6 +90,9 @@ class Profile:
         digest = hashlib.sha256(message.encode()).digest()
         return (key or self.key).sign_schnorr(digest).hex()
 
+    def sign_claim(self, showing: str) -> str:
+        return self.key.sign_schnorr(claim_digest(showing)).hex()
+
     def challenge(self, path: str, body: bytes = b"") -> dict:
         resp = self.client.post(
             "/api/auth/challenge",
@@ -192,7 +195,7 @@ class Profile:
                     {"credential": cred.to_bytes().hex()}
                 ),
                 "showing": showing,
-                "signature": self.key.sign_schnorr(claim_digest(showing)).hex(),
+                "signature": self.sign_claim(showing),
             },
         )
         if published.status_code == 200:
@@ -274,7 +277,7 @@ class Profile:
         body = (
             '{"signature":"%s","showing":"%s"}'
             % (
-                self.key.sign_schnorr(claim_digest(card["showing"])).hex(),
+                self.sign_claim(card["showing"]),
                 card["showing"],
             )
         ).encode()

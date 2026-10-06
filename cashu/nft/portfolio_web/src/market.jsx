@@ -38,7 +38,7 @@ export function useMarket(identity, nftWallet, open) {
   const [money, setMoney] = useState(null), [state, setState] = useState('closed'), [error, setError] = useState('');
   const [balances, setBalances] = useState([]), [unread, setUnread] = useState(0), [version, setVersion] = useState(0);
   const [config, setConfig] = useState(null);
-  const moneyRef = useRef(null), nftRef = useRef(nftWallet), openRef = useRef(open);
+  const moneyRef = useRef(null), nftRef = useRef(nftWallet), openRef = useRef(open), closing = useRef(Promise.resolve());
   nftRef.current = nftWallet; openRef.current = open;
   const bump = () => setVersion((v) => v + 1);
 
@@ -48,10 +48,12 @@ export function useMarket(identity, nftWallet, open) {
     if (!wallet) return;
     setBalances(await wallet.balances());
   }, []);
-  const reconcile = useCallback(async () => {
+  // Background runs never open a signing prompt (signer.ts SignOptions); the
+  // "signatures waiting" notice asks again with { interactive: true }.
+  const reconcile = useCallback(async (opts = { interactive: false }) => {
     const wallet = moneyRef.current;
     if (!wallet || wallet.readOnly) return;
-    const { changed, attention } = await wallet.reconcile(nftRef.current || undefined);
+    const { changed, attention } = await wallet.reconcile(nftRef.current || undefined, opts);
     if (attention.length) setError(attention[0]);
     if (changed) bump();
     await refresh();
@@ -61,7 +63,7 @@ export function useMarket(identity, nftWallet, open) {
     if (!identity || !config) return;
     let disposed = false, wallet = null;
     setState('opening'); setError('');
-    loadMoney().then(({ MoneyWallet }) => MoneyWallet.open(identity.secret, { devMints: config.dev_mints }))
+    loadMoney().then(({ MoneyWallet }) => MoneyWallet.open(identity, { devMints: config.dev_mints }))
       .then(async (opened) => {
         if (disposed) { await opened.dispose(); return; }
         wallet = opened; moneyRef.current = opened; setMoney(opened);
@@ -70,16 +72,19 @@ export function useMarket(identity, nftWallet, open) {
         await reconcile().catch((e) => setError(e.message));
       })
       .catch((e) => { if (!disposed) { setState('error'); setError(e.message); } });
-    return () => { disposed = true; moneyRef.current = null; setMoney(null); if (wallet) wallet.dispose().catch(() => {}); };
+    return () => { disposed = true; moneyRef.current = null; setMoney(null); if (wallet) closing.current = wallet.dispose().catch(() => {}); };
   }, [identity, config, refresh, reconcile]);
 
   // Purchases recover once the NFT wallet is open too.
   useEffect(() => { if (nftWallet && moneyRef.current) reconcile().catch(() => {}); }, [nftWallet, reconcile]);
+  /** Resolves once a closed wallet has synced and released its lease. */
+  const closed = useCallback(() => new Promise((r) => setTimeout(r, 0)).then(() => closing.current), []);
 
   // Private inbox: authenticated long-poll from a stored cursor; on return,
   // missed events replay and reconciliation reads authoritative state.
   useEffect(() => {
-    if (!money) return;
+    // Log out clears the identity a render before the wallet closes.
+    if (!money || !identity) return;
     let stop = false;
     const key = `cashu-market-cursor:${identity.pubkey}`;
     let cursor = Number(local.get(key) || 0), first = !local.get(key);
@@ -107,16 +112,16 @@ export function useMarket(identity, nftWallet, open) {
   }, [money, identity, reconcile]);
 
   const markRead = useCallback(async () => {
-    if (!money) return;
+    if (!money || !identity) return;
     const key = `cashu-market-cursor:${identity.pubkey}`;
     await money.api.markRead(Number(local.get(key) || 0)).catch(() => {});
     setUnread(0);
   }, [money, identity]);
   const takeOver = async () => {
     if (!money) return;
-    await money.takeOver(); setState(money.readOnly ? 'elsewhere' : 'ready'); await reconcile();
+    await money.takeOver(); setState(money.readOnly ? 'elsewhere' : 'ready'); await reconcile({ interactive: true });
   };
-  return { money, state, error, balances, unread, version, config, refresh, reconcile, markRead, takeOver, bump };
+  return { money, state, error, balances, unread, version, config, refresh, reconcile, markRead, takeOver, bump, closed };
 }
 
 export function TestBadge({ on }) { return on ? <span className="badge badge-warn">Test sats</span> : null; }

@@ -33,6 +33,7 @@ from ..core.crypto.ps import (
 from ..core.htlc import HTLCSecret
 from ..core.nuts import nut10
 from ..core.secret import SecretKind
+from .nostr_sig import verify_signature
 
 PROTOCOL = "cashu-nft-offer-1"
 LISTING_PROTOCOL = "cashu-nft-listing-1"
@@ -125,15 +126,21 @@ def sign_purpose(domain: bytes, digest: bytes, secret: bytes) -> str:
     )
 
 
+# The label a signing extension shows for each purpose (nostr_sig.SIG_LABELS).
+PURPOSES = {
+    LISTING_DOMAIN: "listing",
+    OFFER_SIG_DOMAIN: "offer",
+    ACCEPT_DOMAIN: "accept",
+}
+
+
 def verify_purpose(domain: bytes, digest: bytes, signature: str, pubkey: str) -> bool:
-    try:
-        sig = bytes.fromhex(signature)
-        key = PublicKeyXOnly(bytes.fromhex(pubkey))
-    except ValueError:
+    """A profile signature (raw or extension event, nostr_sig) over SHA256(domain || digest)."""
+    if domain not in PURPOSES:
         return False
-    if len(sig) != 64:
-        return False
-    return key.verify(sig, hashlib.sha256(domain + digest).digest())
+    return verify_signature(
+        pubkey, PURPOSES[domain], hashlib.sha256(domain + digest).digest(), signature
+    )
 
 
 # --- buyer receive authorization ------------------------------------------

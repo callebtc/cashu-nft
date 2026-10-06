@@ -1,25 +1,25 @@
 import { bytesToHex, hexToBytes } from '@noble/hashes/utils.js';
-import { profileKey } from '../crypto.mjs';
 import { utf8 } from './ps.ts';
 import { openRecordStore, type RecordStore } from '../storage.ts';
 
 export interface Envelope { version: 1; nonce: string; ciphertext: string; }
 const copy = (bytes: Uint8Array) => Uint8Array.from(bytes);
-export async function walletSeed(secret: string, keyset: string) {
-  const material = await crypto.subtle.importKey('raw', copy(hexToBytes(secret)), 'HKDF', false, ['deriveBits']);
+// `root` is the profile's HKDF root (signer.ts `Profile.root`).
+export async function walletSeed(root: string, keyset: string) {
+  const material = await crypto.subtle.importKey('raw', copy(hexToBytes(root)), 'HKDF', false, ['deriveBits']);
   return new Uint8Array(await crypto.subtle.deriveBits({ name: 'HKDF', hash: 'SHA-256', salt: copy(hexToBytes(keyset)), info: copy(utf8('Cashu_NFT_Coco_Seed_v1')) }, material, 512));
 }
 export class EncryptedVault {
   private key: Promise<CryptoKey>;
   private database: Promise<RecordStore>;
-  constructor(private secret: string, private keyset: string) {
+  constructor(root: string, private pubkey: string, private keyset: string) {
     this.key = (async () => {
-      const material = await crypto.subtle.importKey('raw', copy(hexToBytes(secret)), 'HKDF', false, ['deriveKey']);
+      const material = await crypto.subtle.importKey('raw', copy(hexToBytes(root)), 'HKDF', false, ['deriveKey']);
       return crypto.subtle.deriveKey({ name: 'HKDF', hash: 'SHA-256', salt: copy(hexToBytes(keyset)), info: copy(utf8('Cashu_NFT_Credential_Encryption_v1')) }, material, { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
     })();
-    this.database = openRecordStore(`cashu-nft-vault-v2:${profileKey(secret)}:${keyset}`, 'encrypted');
+    this.database = openRecordStore(`cashu-nft-vault-v2:${pubkey}:${keyset}`, 'encrypted');
   }
-  private aad(scope: string) { return copy(utf8(`Cashu_NFT_Encrypted_v1\n${profileKey(this.secret)}\n${this.keyset}\n${scope}`)); }
+  private aad(scope: string) { return copy(utf8(`Cashu_NFT_Encrypted_v1\n${this.pubkey}\n${this.keyset}\n${scope}`)); }
   async encrypt(value: unknown, scope: string): Promise<Envelope> {
     const nonce = crypto.getRandomValues(new Uint8Array(12));
     const ciphertext = await crypto.subtle.encrypt({ name: 'AES-GCM', iv: nonce, additionalData: this.aad(scope), tagLength: 128 }, await this.key, copy(utf8(JSON.stringify(value))));

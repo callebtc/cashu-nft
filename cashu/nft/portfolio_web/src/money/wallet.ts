@@ -1,9 +1,9 @@
 // Ordinary ecash wallet (Coco 2.0.0 + cashu-ts 5.0.0-rc.11) on the encrypted
 // repository boundary. One wallet per profile, independent of the NFT keyset:
 // its seed, snapshot key, journal key and authorization keys are all derived
-// from the profile key under separate, versioned domains (store.ts).
+// from the profile's root secret under separate, versioned domains (store.ts).
 import { OperationInProgressError, getTokenMetadata, initializeCoco, type Manager } from '@cashu/coco-core';
-import { profileKey } from '../crypto.mjs';
+import { asProfile, type Profile, type SignOptions } from '../signer.ts';
 import { MarketApi, remoteBackup } from '../market/api.ts';
 import { marketPlugin, type MarketCoordinator } from '../market/coordinator.ts';
 import { installCocoCompat } from './compat.ts';
@@ -50,17 +50,18 @@ export class MoneyWallet {
     this.pubkey = api.pubkey;
   }
 
-  static async open(secret: string, opts: { origin?: string; devMints?: string[]; remote?: boolean; takeover?: boolean } = {}): Promise<MoneyWallet> {
-    const api = new MarketApi(secret, opts.origin ?? '');
-    const pubkey = profileKey(secret);
-    const repos = await EncryptedRepositories.open(secret, opts.remote === false ? null : remoteBackup(api));
+  /** `profile` is a signer.ts Profile, or a raw key for a collection that uses its own key. */
+  static async open(profile: string | Profile, opts: { origin?: string; devMints?: string[]; remote?: boolean; takeover?: boolean } = {}): Promise<MoneyWallet> {
+    const { pubkey, signer, root } = asProfile(profile);
+    const api = new MarketApi(signer, opts.origin ?? '');
+    const repos = await EncryptedRepositories.open(root, pubkey, opts.remote === false ? null : remoteBackup(api));
     await repos.acquireLease(opts.takeover ?? false);
-    const seed = await moneySeed(secret);
+    const seed = await moneySeed(root);
     const journalStore = new LocalRecords(pubkey + ':journal');
     let market: MarketCoordinator | undefined;
     const manager = await initializeCoco({
       repo: repos, seedGetter: async () => seed,
-      plugins: [marketPlugin(secret, pubkey, api, journalStore, journalStore, (c) => { market = c; })],
+      plugins: [marketPlugin(root, signer, api, journalStore, journalStore, (c) => { market = c; })],
       // Watchers and processors on: quotes are claimed and proof states
       // tracked while the wallet is open; paused when the page is hidden.
       processors: { mintOperationProcessor: { autoClaimMintQuotes: true } },
@@ -190,5 +191,5 @@ export class MoneyWallet {
   async withdraw(operationId: string) { return this.manager.ops.melt.execute(operationId); }
 
   /** Browser recovery path for offers and sales; run on open and on events. */
-  reconcile(nft?: Parameters<MarketCoordinator['reconcile']>[0]) { return this.market.reconcile(nft); }
+  reconcile(nft?: Parameters<MarketCoordinator['reconcile']>[0], opts?: SignOptions) { return this.market.reconcile(nft, opts); }
 }

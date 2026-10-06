@@ -1,6 +1,6 @@
 // Typed client for /api/market and the profile-signed market/money routes.
 import { checked, signedRequest } from '../api.mjs';
-import { profileKey } from '../crypto.mjs';
+import { asSigner, type Signer } from '../signer.ts';
 import type { RemoteBackup, Sealed } from '../money/store.ts';
 import type { Acceptance, BlindedOutput, DeliveryReceipt, ListingManifest, OfferManifest } from './protocol.ts';
 
@@ -33,14 +33,15 @@ const json = (value: unknown) => new TextEncoder().encode(JSON.stringify(value))
 
 export class MarketApi {
   readonly pubkey: string;
-  constructor(private secret: string, readonly origin = '') { this.pubkey = profileKey(secret); }
+  private signer: Signer;
+  constructor(signer: string | Signer, readonly origin = '') { this.signer = asSigner(signer); this.pubkey = this.signer.pubkey; }
 
   private async read<T>(path: string): Promise<T> {
     return (await checked(await fetch(this.origin + path, { cache: 'no-store' }))).json();
   }
   private async post<T>(path: string, body?: unknown): Promise<T> {
     const bytes = body === undefined ? new Uint8Array() : json(body);
-    const response = await signedRequest(this.secret, `/api/profiles/${this.pubkey}${path}`, bytes, 'application/json', this.origin);
+    const response = await signedRequest(this.signer, `/api/profiles/${this.pubkey}${path}`, bytes, 'application/json', this.origin);
     return response.json();
   }
 

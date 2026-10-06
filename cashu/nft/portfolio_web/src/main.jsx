@@ -3,8 +3,8 @@ import { createRoot } from 'react-dom/client';
 import { Menu } from '@base-ui/react/menu';
 import { AnimatePresence, MotionConfig, motion } from 'motion/react';
 import { Toaster, toast } from 'sonner';
-import { ArrowLeft, ArrowRight, Check, Compass, Monitor, Moon, Sun, Image as ImageIcon, Download, Ellipsis, Eye, EyeOff, FileJson, HandCoins, ImageDown, Info, KeyRound, Link2, Menu as MenuIcon, Plus,
-  Pencil, Radio, RefreshCw, RotateCcw, Send, ShieldX, Store, Trash2, Upload, Undo2, Wallet } from 'lucide-react';
+import { ArrowLeft, ArrowRight, Check, Compass, Monitor, Moon, Sun, Image as ImageIcon, Download, Ellipsis, Eye, EyeOff, FileJson, HandCoins, ImageDown, Info, KeyRound, Link2, LogOut, Menu as MenuIcon, Plus,
+  Pencil, PenLine, Radio, RefreshCw, RotateCcw, Send, ShieldX, Store, Trash2, Upload, Undo2, Wallet } from 'lucide-react';
 import '@fontsource-variable/inter';
 import '@fontsource-variable/bricolage-grotesque';
 import '@fontsource/jetbrains-mono/400.css';
@@ -21,6 +21,10 @@ import { linkUrl, newLinkId, sealLink } from './link.mjs';
 import { ListingControls, ListingPage, MarketPage, OffersPage, PendingPurchases, useMarket } from './market.jsx';
 import { WalletPage } from './WalletPage.jsx';
 import { local } from './storage.ts';
+import { ACTIVE, KEYRING, forget, identityFor, initialIdentity, keyCollections, lockedEntry, saveEntry, storedKeys } from './identity.ts';
+import { deferred, isDeferred } from './signer.ts';
+import { npubDecode, npubEncode, publicKeyIn, shortNpub } from './npub.mjs';
+import { ExtensionButton, useNostrLogin } from './login.jsx';
 import { ACCEPT, LABELS, fileFormat, formatOf, imageUrl, withoutExtension } from './formats.mjs';
 import { HOME, MOVED_FROM, MoveOffer, MoveReceive, MoveStranded, movePlan, redirectHome } from './move.jsx';
 import { ActivityItem, ActivityList, ActivityPage, CollectionCard, EditCollectionDialog, ExplorePage, FollowButton, LikeButton, MarketCard,
@@ -29,25 +33,20 @@ import { ActivityItem, ActivityList, ActivityPage, CollectionCard, EditCollectio
 const openWallet = (...args) => import('./wallet/index.ts').then((module) => module.openWallet(...args));
 const transferTools = () => Promise.all([import('./wallet/image.ts'), import('./wallet/ps.ts')]);
 
-const KEYRING = 'cashu-nft-keys-v1', ACTIVE = 'cashu-nft-active-v1', MINT_PIN = 'cashu-nft-mint-v1';
-function storedKeys() {
-  try { const keys = JSON.parse(local.get(KEYRING) || '{}'); return keys && typeof keys === 'object' && !Array.isArray(keys) ? keys : {}; }
-  catch { return {}; }
-}
-function initialIdentity() {
-  try {
-    const keys = storedKeys(), active = local.get(ACTIVE);
-    const secret = keys[active];
-    return secret && profileKey(secret) === active ? { secret, pubkey: active } : null;
-  } catch { return null; }
-}
+const MINT_PIN = 'cashu-nft-mint-v1';
 // Polling returns a fresh object even when nothing changed; keep the old one so
 // cards don't re-render and proofs aren't re-verified every 15 seconds.
 const keepSame = (prev, next) => prev && JSON.stringify(prev) === JSON.stringify(next) ? prev : next;
 function routeKey() { return window.location.pathname.match(/^\/p\/([0-9a-f]{64})\/?$/)?.[1] || null; }
+// Nostr profile links (/p/npub1…) open the same page under its hex key.
+function canonicalRoute() {
+  const npub = window.location.pathname.match(/^\/p\/(npub1[0-9a-z]+)\/?$/i)?.[1], hex = npub && npubDecode(npub);
+  if (hex) window.history.replaceState({}, '', `/p/${hex}${window.location.search}`);
+}
 // Where onboarding/top-up returns to: only internal listing paths (no open redirect).
 const safeReturn = (v) => (/^\/market\/[0-9a-f]{32}$/.test(v || '') ? v : null);
 function readRoute() {
+  canonicalRoute();
   const path = window.location.pathname, params = new URLSearchParams(window.location.search), nft = params.get('nft');
   const pubkey = routeKey();
   if (pubkey) return { page: 'profile', pubkey, nft };
@@ -487,11 +486,16 @@ function ThemeMenu({ theme, setTheme }) {
 }
 
 function SignInFirst({ onStart }) {
-  return <main className="page"><div className="empty"><strong>Start a collection first</strong><span className="muted">Your wallet and offers belong to your collection key.</span><Button variant="primary" onClick={onStart}>Get started</Button></div></main>;
+  return <main className="page"><div className="empty"><strong>Start a collection first</strong><span className="muted">Your wallet and offers belong to your collection. Start one, or sign in with Nostr.</span><Button variant="primary" onClick={onStart}>Get started</Button></div></main>;
 }
 
 function App() {
   const [identity, setIdentity] = useState(initialIdentity);
+  // The active Nostr collection, when it needs a sign-in to open.
+  const [locked, setLocked] = useState(lockedEntry);
+  // Signatures background work left for the user (signer.ts `deferred`).
+  const [waiting, setWaiting] = useState(deferred.count);
+  useEffect(() => deferred.subscribe(setWaiting), []);
   const [route, setRoute] = useState(readRoute);
   const pubkey = route.page === 'profile' ? route.pubkey : null;
   const [config, setConfig] = useState(null), [fatal, setFatal] = useState('');
@@ -499,6 +503,7 @@ function App() {
   const [dialog, setDialog] = useState(null), [selected, setSelected] = useState(null), [tab, setTab] = useState('collection');
   const [busy, setBusy] = useState(''), [refresh, setRefresh] = useState(0), [visitor, setVisitor] = useState(false);
   const [generated, setGenerated] = useState(''), [inputKey, setInputKey] = useState(''), [name, setName] = useState(''), [backedUp, setBackedUp] = useState(false);
+  const [password, setPassword] = useState('');
   const [openInput, setOpenInput] = useState(''), [fresh, setFresh] = useState(null);
   const [localWallet, setLocalWallet] = useState(null), [walletState, setWalletState] = useState('opening'), [walletError, setWalletError] = useState('');
   const [relations, toggleRelation] = useRelations(identity);
@@ -571,7 +576,7 @@ function App() {
     const me = identityRef.current;
     if (me?.pubkey === key) {
       try {
-        const { ids } = await (await signedRequest(me.secret, `/api/profiles/${key}/cards/pending`)).json();
+        const { ids } = await (await signedRequest(me.signer, `/api/profiles/${key}/cards/pending`)).json();
         const pending = new Set(ids);
         data.cards = data.cards.map((c) => (pending.has(c.id) ? { ...c, status: 'ready' } : c));
       } catch { /* shown as owned until the next refresh */ }
@@ -590,8 +595,9 @@ function App() {
     if (!identity || !config) { setLocalWallet(null); return; }
     let disposed = false;
     setWalletState('opening'); setWalletError(''); setLocalWallet(null);
-    openWallet(identity.secret, config).then(async ({ wallet }) => {
-      await wallet.recover();
+    openWallet(identity, config).then(async ({ wallet }) => {
+      // In the background a signing extension is never asked; see `waiting`.
+      await wallet.recover({ interactive: false }).catch((e) => { if (!isDeferred(e)) throw e; });
       if (!disposed) { setLocalWallet(wallet); setWalletState('ready'); if (routeKey() === identity.pubkey) await reloadRef.current(identity.pubkey); }
     }).catch((e) => { if (!disposed) { setWalletState('error'); setWalletError(e.message); } });
     return () => { disposed = true; };
@@ -622,34 +628,87 @@ function App() {
   const recoverWallet = async () => {
     setBusy('Syncing wallet'); setWalletError('');
     try {
-      const { wallet } = await openWallet(identity.secret, config);
+      const { wallet } = await openWallet(identity, config);
       await wallet.recover(); setLocalWallet(wallet); setWalletState('ready');
       migrationAttempts.current.clear(); await reload(); toast.success('Wallet synced.');
     } catch (e) { setWalletError(e.message); toast.error(e.message); }
     finally { setBusy(''); }
   };
 
-  const closeDialog = () => { if (busy) return; setDialog(null); setGenerated(''); setInputKey(''); setBackedUp(false); };
+  const closeDialog = () => { if (busy || nostrLogin.busy) return; setDialog(null); setGenerated(''); setInputKey(''); setPassword(''); setBackedUp(false); };
   const openCreate = () => { setName(''); setGenerated(newPrivateKey()); setBackedUp(false); setDialog('create'); };
-  const saveIdentity = (secret) => {
-    const p = profileKey(secret), keys = storedKeys(); keys[p] = secret;
-    local.set(KEYRING, JSON.stringify(keys)); local.set(ACTIVE, p);
-    const next = { secret, pubkey: p }; setIdentity(next); return next;
+  const openImport = (key = '') => { setName(''); setInputKey(key); setPassword(''); setDialog('import'); };
+  // A stored ncryptsec comes prefilled: only its password is missing.
+  const passwordFirst = dialog === 'import' && /^ncryptsec1/.test(inputKey) && !password;
+  // Lands a sign-in where the visitor was heading.
+  const arrived = (next, data, message) => {
+    setIdentity(next); setLocked(null);
+    setDialog(null); setGenerated(''); setInputKey(''); setPassword(''); setBackedUp(false);
+    const here = readRoute();
+    if (here.page === 'claim') toast.success('Collection ready. Now claim your NFT.');
+    // Came for an NFT: fund the wallet next, then return to that listing.
+    else if (here.page === 'listing') { navigate(`/wallet?then=/market/${here.id}`); toast.success('Collection ready. Add ecash to make your offer.'); }
+    else if (here.page === 'wallet' || here.page === 'offers') { navigate(window.location.pathname + window.location.search); toast.success('Collection ready.'); }
+    else { navigate(`/p/${next.pubkey}`); if (data) setProfile(data); toast.success(message); }
+  };
+  const nostrLogin = useNostrLogin((next, data) => arrived(next, data, data ? 'Collection created.' : 'Signed in with Nostr.'), () => setDialog(null));
+  /** A collection that uses its own key: create or unlock it, as always. */
+  const unlockOwnKey = async (secret) => {
+    const p = profileKey(secret);
+    const response = await signedRequest(secret, `/api/profiles/${p}`, JSON.stringify({ name: name.trim() || 'Untitled collection' }), 'application/json');
+    const data = await response.json();
+    saveEntry(p, secret);
+    arrived(identityFor(p, secret), data, dialog === 'create' ? 'Collection created.' : 'Collection unlocked.');
   };
   const onboard = async (event) => {
-    event.preventDefault(); setBusy(dialog === 'create' ? 'Creating collection' : 'Unlocking');
+    event.preventDefault();
+    const text = inputKey.trim();
+    setBusy(dialog === 'create' ? 'Creating collection' : 'Unlocking');
     try {
-      const secret = dialog === 'create' ? generated : inputKey.trim().toLowerCase();
-      const p = profileKey(secret);
-      const response = await signedRequest(secret, `/api/profiles/${p}`, JSON.stringify({ name: name.trim() || 'Untitled collection' }), 'application/json');
-      const data = await response.json(); saveIdentity(secret);
-      setDialog(null); setGenerated(''); setInputKey(''); setBackedUp(false);
-      const here = readRoute();
-      if (here.page === 'claim') toast.success('Collection ready. Now claim your NFT.');
-      // Came for an NFT: fund the wallet next, then return to that listing.
-      else if (here.page === 'listing') { navigate(`/wallet?then=/market/${here.id}`); toast.success('Collection ready. Add ecash to make your offer.'); }
-      else if (here.page === 'wallet' || here.page === 'offers') { navigate(window.location.pathname + window.location.search); toast.success('Collection ready.'); }
-      else { navigate(`/p/${p}`); setProfile(data); toast.success(dialog === 'create' ? 'Collection created.' : 'Collection unlocked.'); }
+      if (dialog === 'create') { await unlockOwnKey(generated); return; }
+      // A plain hex key opens a collection that uses its own key, unless the
+      // server knows it as a Nostr collection. Pasted Nostr keys (nsec,
+      // ncryptsec) start a Nostr collection unless one with its own key exists.
+      let secret, ncryptsec;
+      if (/^[0-9a-f]{64}$/i.test(text)) {
+        secret = text.toLowerCase();
+        const known = await fetch(`/api/profiles/${profileKey(secret)}`, { cache: 'no-store' }).then((r) => (r.ok ? r.json() : null)).catch(() => null);
+        if (!known?.nostr) { await unlockOwnKey(secret); return; }
+      } else {
+        const nostr = await import('./nostr.ts'), pasted = nostr.parseKey(text);
+        if (pasted.kind === 'npub') throw new Error('That’s a public key. Paste your private key (nsec), or use a Nostr extension.');
+        if (pasted.kind === 'ncryptsec') { ncryptsec = pasted.ncryptsec; secret = nostr.unlockKey(ncryptsec, password); }
+        else secret = pasted.secret;
+      }
+      setBusy('');
+      if (await nostrLogin.withKey(secret, ncryptsec) === 'key') { setBusy('Unlocking'); await unlockOwnKey(secret); }
+    } catch (e) { toast.error(e.message); } finally { setBusy(''); }
+  };
+  const relogin = () => {
+    if (locked?.entry.kind === 'ncryptsec') openImport(locked.entry.ncryptsec);
+    else nostrLogin.withExtension();
+  };
+  const logout = async () => {
+    const me = identity, entry = storedKeys()[me.pubkey];
+    setBusy('Logging out'); deferred.clear();
+    setIdentity(null); setLocalWallet(null);
+    try {
+      // The ecash wallet syncs and releases its lease before the session ends.
+      await market.closed();
+      await import('./wallet/index.ts').then((wallets) => wallets.closeWallet(me.pubkey)).catch(() => {});
+      if (entry?.kind === 'nip07') await (await import('./nostr.ts')).endSession(me.signer, entry.session).catch(() => {});
+    } finally {
+      forget(me.pubkey);
+      setIdentity(initialIdentity()); setLocked(lockedEntry());
+      setBusy(''); navigate('/'); toast.success('Logged out.');
+    }
+  };
+  const signWaiting = async () => {
+    setBusy('Signing'); deferred.clear();
+    try {
+      if (localWallet) await localWallet.recover({ interactive: true });
+      await market.reconcile({ interactive: true });
+      await reload().catch(() => {}); toast.success('Signed. Your wallet is up to date.');
     } catch (e) { toast.error(e.message); } finally { setBusy(''); }
   };
   const added = async (asset, kind) => {
@@ -665,7 +724,7 @@ function App() {
         const { token, nullifier } = await localWallet.sendToken(target);
         const id = newLinkId();
         const { fragment, envelope } = await sealLink(token, { id, h: target.h, password });
-        await signedRequest(identity.secret, `/api/profiles/${identity.pubkey}/links`, JSON.stringify({ id, card_id: target.id, nullifier, envelope }), 'application/json');
+        await signedRequest(identity.signer, `/api/profiles/${identity.pubkey}/links`, JSON.stringify({ id, card_id: target.id, nullifier, envelope }), 'application/json');
         await reload().catch(() => {});
         toast.success('Link created. Copy it before closing.');
         return { url: linkUrl(window.location.origin, id, fragment), protected: !!password };
@@ -684,7 +743,7 @@ function App() {
   };
   const renameCard = async (target, title) => {
     try {
-      await signedRequest(identity.secret, `/api/profiles/${identity.pubkey}/cards/${target.id}/title`, JSON.stringify({ title }), 'application/json');
+      await signedRequest(identity.signer, `/api/profiles/${identity.pubkey}/cards/${target.id}/title`, JSON.stringify({ title }), 'application/json');
       await reload(); toast.success('Renamed.'); return true;
     } catch (e) { toast.error(e.message); return false; }
   };
@@ -695,9 +754,9 @@ function App() {
   };
   const openProfile = (event) => {
     event.preventDefault();
-    const match = openInput.trim().match(/(?:^|\/p\/)([0-9a-f]{64})(?:\/?$)/);
-    if (!match) { toast.error('Enter a public key or a profile link.'); return; }
-    setDialog(null); navigate(`/p/${match[1]}`);
+    const target = publicKeyIn(openInput);
+    if (!target) { toast.error('Enter a public key, an npub or a profile link.'); return; }
+    setDialog(null); navigate(`/p/${target}`);
   };
   const canAdd = owner && !!localWallet && !!config && !busy;
   const needsIdentity = () => { toast('Start a collection first, then you can like and follow.'); openCreate(); };
@@ -755,8 +814,9 @@ function App() {
                   <Menu.Item key={href} className={`menu-item ${route.page === 'profile' ? '' : 'menu-mobile'}`} onClick={() => navigate(href)}><Icon size={15} />{label}{navActive(page) && <Check size={15} className="menu-check" />}</Menu.Item>)}
                 <Menu.Separator className="menu-sep" />
                 <Menu.Item className="menu-item" onClick={openCreate} disabled={!config}><Plus size={15} />Start another collection</Menu.Item>
-                <Menu.Item className="menu-item" onClick={() => { setName(''); setDialog('import'); }}><KeyRound size={15} />Import a key</Menu.Item>
+                <Menu.Item className="menu-item" onClick={() => openImport()}><KeyRound size={15} />Import a key</Menu.Item>
                 <Menu.Item className="menu-item" onClick={() => setDialog('open')}><Link2 size={15} />Open by public key</Menu.Item>
+                {identity.nostr && <Menu.Item className="menu-item" onClick={logout} disabled={!!busy}><LogOut size={15} />Log out</Menu.Item>}
                 <ThemeItems theme={theme} setTheme={setTheme} />
               </Menu.Popup></Menu.Positioner></Menu.Portal>
             </Menu.Root>
@@ -765,12 +825,19 @@ function App() {
       </div>
     </header>
 
+    {(identity && waiting > 0) || (!identity && locked) ? <div className="session-notices">
+      {identity && waiting > 0 && <Notice action={<Button size="sm" variant="secondary" icon={busy ? <Spinner size={14} /> : <PenLine size={14} />} onClick={signWaiting} disabled={!!busy}>Sign</Button>}>
+        {waiting === 1 ? 'One signature is waiting' : `${waiting} signatures are waiting`} so your wallet can finish syncing.</Notice>}
+      {!identity && locked && <Notice action={<Button size="sm" variant="secondary" icon={nostrLogin.busy ? <Spinner size={14} /> : null} onClick={relogin} disabled={!!nostrLogin.busy}>Sign in</Button>}>
+        {locked.entry.kind === 'ncryptsec' ? 'Enter your password to open your collection.' : 'Your Nostr sign-in has expired. Sign in again to open your collection.'}</Notice>}
+    </div> : null}
+
     {fatal ? <main className="page error-page"><ShieldX size={32} /><h1>The mint is unavailable</h1><p className="muted">{fatal}</p><Button variant="primary" onClick={() => window.location.reload()}>Try again</Button></main>
 
       : route.page === 'explore' ? <ExplorePage tab={route.tab} navigate={navigate} relations={relations} onLike={likeCollection} openCard={openCard} />
 
       : route.page === 'claim' ? <ClaimPage linkId={route.id} config={config} identity={identity} wallet={localWallet} walletState={walletState} navigate={navigate}
-        onCreate={openCreate} onImport={() => { setName(''); setDialog('import'); }} onReceived={() => toast.success('Claimed. The NFT is in your collection.')} />
+        onCreate={openCreate} onImport={() => openImport()} onReceived={() => toast.success('Claimed. The NFT is in your collection.')} />
 
       : route.page === 'activity' ? <ActivityPage identity={identity} navigate={navigate} openCard={openCard} />
 
@@ -796,7 +863,6 @@ function App() {
                 : <Button variant="primary" size="lg" icon={<Plus size={16} />} onClick={openCreate} disabled={!config}>Start a collection</Button>}
               <Button variant="secondary" size="lg" onClick={() => navigate('/how-it-works')}>How it works</Button>
             </div>
-            {!identity && <button className="link" onClick={() => { setName(''); setDialog('import'); }}>Already collecting? Import your key</button>}
           </motion.div>
           <div className="hero-stage" aria-label="Illustrative preview cards">
             <span className="sticker st-1" aria-hidden="true">Free mint</span>
@@ -879,7 +945,9 @@ function App() {
             <div className="profile-id">
               <h1>{profile?.name || (loading ? ' ' : 'Collection')}</h1>
               <div className="profile-sub">
-                <CopyChip value={pubkey} message="Public key copied" />
+                {profile?.nostr
+                  ? <><CopyChip value={npubEncode(pubkey)} display={shortNpub(pubkey)} message="npub copied" /><span className="badge badge-nostr">Nostr</span></>
+                  : <CopyChip value={pubkey} message="Public key copied" />}
                 {owner && <span className={`wallet-state is-${walletError ? 'error' : walletState}`} title={walletError || ''}>
                   {walletState === 'opening' ? <Spinner size={11} /> : <span className="dot" />}
                   {busy || (walletState === 'opening' ? 'Opening wallet' : walletError ? 'Wallet needs attention' : 'Wallet ready')}
@@ -896,11 +964,11 @@ function App() {
                 <Menu.Portal><Menu.Positioner className="menu-layer" sideOffset={6} align="end"><Menu.Popup className="menu">
                   <Menu.Item className="menu-item" onClick={() => setDialog('edit')} disabled={!profile}><Pencil size={15} />Edit profile</Menu.Item>
                   <Menu.Item className="menu-item" onClick={() => setVisitor((v) => !v)}>{visitor ? <EyeOff size={15} /> : <Eye size={15} />}{visitor ? 'Back to owner view' : 'View as visitor'}</Menu.Item>
-                  <Menu.Item className="menu-item" onClick={() => setDialog('backup')}><KeyRound size={15} />Back up private key</Menu.Item>
+                  <Menu.Item className="menu-item" onClick={() => setDialog('backup')}><KeyRound size={15} />{identity.nostr ? 'Back up wallet key' : 'Back up private key'}</Menu.Item>
                   <Menu.Item className="menu-item" onClick={recoverWallet} disabled={!!busy || !config}><RefreshCw size={15} />Sync wallet from backup</Menu.Item>
                 </Menu.Popup></Menu.Positioner></Menu.Portal>
               </Menu.Root>}
-              {!identity && <Button variant="secondary" icon={<KeyRound size={15} />} onClick={() => { setName(''); setDialog('import'); }}>Unlock</Button>}
+              {!identity && <Button variant="secondary" icon={<KeyRound size={15} />} onClick={() => openImport()}>Unlock</Button>}
             </div>
           </div>
           <div className="profile-stats">
@@ -912,7 +980,7 @@ function App() {
           </div>
         </section>
 
-        {profileError && <Notice action={!profile && identity?.pubkey === pubkey ? <Button size="sm" variant="secondary" onClick={() => { setInputKey(identity.secret); setDialog('import'); }}>Create it</Button> : null}>{profileError}</Notice>}
+        {profileError && <Notice action={!profile && identity?.pubkey === pubkey && identity.secret ? <Button size="sm" variant="secondary" onClick={() => openImport(identity.secret)}>Create it</Button> : null}>{profileError}</Notice>}
         {owner && <StorageNotice />}
         {owner && walletError && <Notice tone="bad" action={<Button size="sm" variant="secondary" onClick={recoverWallet} disabled={!!busy}>Sync wallet</Button>}>{walletError}</Notice>}
 
@@ -974,29 +1042,46 @@ function App() {
             <span className="ack-box"><DrawnCheck on={backedUp} size={14} /></span>
             <span>I saved my private key. Without it this collection can't be recovered.</span>
           </label>
-        </> : <label className="field"><span>Private key</span><input type="password" autoComplete="off" placeholder="64 hex characters" spellCheck={false} value={inputKey} onChange={(e) => setInputKey(e.target.value)} required autoFocus /></label>}
-        <Button variant="primary" size="lg" className="full" type="submit" disabled={!!busy || (dialog === 'create' && !backedUp)} icon={busy ? <Spinner /> : null}>
+        </> : <>
+          <label className="field"><span>Private key</span><input type="password" autoComplete="off" placeholder="nsec, ncryptsec or 64 hex characters" spellCheck={false} value={inputKey} onChange={(e) => setInputKey(e.target.value)} required autoFocus={!passwordFirst} /></label>
+          {/^\s*(?:nostr:)?ncryptsec1/i.test(inputKey) && <label className="field"><span>Password</span><input type="password" autoComplete="current-password" value={password} onChange={(e) => setPassword(e.target.value)} required autoFocus={passwordFirst} /></label>}
+          {/^\s*(?:nostr:)?nsec1/i.test(inputKey) && <span className="hint">Prefer a signing extension: your nsec never touches this site.</span>}
+        </>}
+        <Button variant="primary" size="lg" className="full" type="submit" disabled={!!busy || !!nostrLogin.busy || (dialog === 'create' && !backedUp)} icon={busy ? <Spinner /> : null}>
           {busy || (dialog === 'create' ? 'Create collection' : 'Unlock')}
         </Button>
+        <div className="or-rule" role="separator"><span>or</span></div>
+        <ExtensionButton onClick={nostrLogin.withExtension} busy={nostrLogin.busy} onPaste={dialog === 'create' ? () => openImport() : null} />
       </form>
     </Modal>
 
     <Modal open={dialog === 'open'} close={closeDialog} title="Find a profile" description="Paste a collector's public key or profile link.">
       <form onSubmit={openProfile} className="stack">
-        <label className="field"><span>Public key or link</span><input value={openInput} onChange={(e) => setOpenInput(e.target.value)} placeholder="https://…/p/… or 64 hex characters" required autoFocus /></label>
+        <label className="field"><span>Public key or link</span><input value={openInput} onChange={(e) => setOpenInput(e.target.value)} placeholder="https://…/p/…, npub1… or 64 hex characters" required autoFocus /></label>
         <Button variant="primary" size="lg" className="full" type="submit" icon={<ArrowRight size={16} />}>Open profile</Button>
       </form>
     </Modal>
 
-    <Modal open={dialog === 'backup'} close={closeDialog} title="Back up your private key" description="This key signs for your collection and decrypts your wallet backups. Keep a copy somewhere other than this browser.">
-      <div className="keybox">
-        <code className="mono">{identity?.secret}</code>
-        <div className="row">
-          <CopyChip value={identity?.secret || ''} display="Copy" message="Private key copied" />
-          <Button variant="ghost" size="sm" icon={<Download size={14} />} onClick={() => download(new Blob([identity.secret + '\n'], { type: 'text/plain' }), 'nonfungible-cash-private-key.txt')}>Download</Button>
+    {identity?.nostr
+      ? <Modal open={dialog === 'backup'} close={closeDialog} title="Back up your wallet key" description="Your Nostr key signs for this collection. This wallet key decrypts its NFTs and ecash. Copies are kept on this server and your Nostr relays; keep one more somewhere safe in case both are lost.">
+        <div className="keybox">
+          <code className="mono">{identity.root}</code>
+          <div className="row">
+            <CopyChip value={identity.root} display="Copy" message="Wallet key copied" />
+            <Button variant="ghost" size="sm" icon={<Download size={14} />} onClick={() => download(new Blob([identity.root + '\n'], { type: 'text/plain' }), 'nonfungible-cash-wallet-key.txt')}>Download</Button>
+          </div>
         </div>
-      </div>
-    </Modal>
+      </Modal>
+      : <Modal open={dialog === 'backup'} close={closeDialog} title="Back up your private key" description="This key signs for your collection and decrypts your wallet backups. Keep a copy somewhere other than this browser.">
+        <div className="keybox">
+          <code className="mono">{identity?.secret}</code>
+          <div className="row">
+            <CopyChip value={identity?.secret || ''} display="Copy" message="Private key copied" />
+            <Button variant="ghost" size="sm" icon={<Download size={14} />} onClick={() => download(new Blob([identity.secret + '\n'], { type: 'text/plain' }), 'nonfungible-cash-private-key.txt')}>Download</Button>
+          </div>
+        </div>
+      </Modal>}
+    {nostrLogin.dialogs}
 
     {identity && <EditCollectionDialog open={dialog === 'edit'} close={() => setDialog(null)} profile={profile} identity={identity} onSaved={(p) => setProfile((prev) => ({ ...prev, ...p }))} />}
     {pubkey && <NetworkDialog pubkey={pubkey} open={dialog === 'followers' || dialog === 'following'} initial={dialog} close={() => setDialog(null)} navigate={navigate} />}
@@ -1025,11 +1110,12 @@ function receiveKeys({ keys, active, mint }) {
   if (typeof mint === 'string' && !local.get(MINT_PIN)) local.set(MINT_PIN, mint);
   return valid.length;
 }
-const movePayload = () => ({ keys: storedKeys(), active: local.get(ACTIVE), mint: local.get(MINT_PIN) });
-const keysText = () => Object.values(storedKeys()).join('\n');
+// Nostr collections don't move: they sign in again on the new origin.
+const movePayload = () => ({ keys: keyCollections(), active: local.get(ACTIVE), mint: local.get(MINT_PIN) });
+const keysText = () => Object.values(keyCollections()).join('\n');
 const downloadKeys = () => download(new Blob([keysText() + '\n'], { type: 'text/plain' }), 'nonfungible-cash-private-keys.txt');
 
-const plan = movePlan(Object.keys(storedKeys()).length > 0);
+const plan = movePlan(Object.keys(keyCollections()).length > 0);
 const root = createRoot(document.getElementById('root'));
 if (plan === 'redirect') redirectHome();
 else if (plan === 'offer') root.render(<MoveOffer payload={movePayload} keysText={keysText} onDownload={downloadKeys} />);

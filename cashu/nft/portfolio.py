@@ -43,6 +43,7 @@ from .ledger import AlreadyMintedError, AlreadySpentError, NFTError, PSLedger
 from .market import Executor, Market, market_router
 from .market_net import MintNetPolicy
 from .moderation import DEFAULT_THRESHOLD, Classifier, Moderation, NSFWClassifier
+from .nostr_sig import PROFILE_SIG, verify_signature
 from .portfolio_image import (
     avatar_jpg,
     image_format,
@@ -97,6 +98,8 @@ AUTH_DOMAIN = "Cashu_NFT_Portfolio_Auth_v1"
 CLAIM_DOMAIN = "Cashu_NFT_Portfolio_Claim_v1\n"
 SHOW_DOMAIN = "Cashu_NFT_Portfolio_Show_v1"
 MAX_AVATAR_BYTES = 5 * 1024 * 1024  # upload limit; stored pictures are 256 px
+SESSION_TTL = 30 * 86400  # longest a signing extension's session key may last
+MAX_SESSIONS = 20  # live session keys per profile
 WEB_DIR = Path(__file__).parent / "portfolio_web" / "dist"
 CARD_LOCKS = [
     LockOptions(table="ps_assets"),
@@ -112,8 +115,28 @@ class ChallengeRequest(BaseModel):
     body_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
 
 
+class VaultRequest(BaseModel):
+    """A Nostr collection's root secret, NIP-44-encrypted to its own key."""
+
+    ciphertext: str = Field(
+        min_length=24, max_length=1024, pattern=r"^[A-Za-z0-9+/]+={0,2}$"
+    )
+    check: str = Field(pattern=r"^[0-9a-f]{32}$")
+
+
 class ProfileRequest(BaseModel):
     name: str = Field(default="Collector", min_length=1, max_length=40)
+    # Only Nostr collections have a vault (NOSTR_LOGIN_PLAN.md).
+    vault: Optional[VaultRequest] = None
+
+
+class SessionRequest(BaseModel):
+    session_pubkey: str = Field(pattern=r"^[0-9a-f]{64}$")
+    expires: int
+
+
+class RevokeRequest(BaseModel):
+    session_pubkey: str = Field(pattern=r"^[0-9a-f]{64}$")
 
 
 class TitleRequest(BaseModel):
@@ -121,7 +144,7 @@ class TitleRequest(BaseModel):
 
 
 class ClaimRequest(BaseModel):
-    signature: str = Field(pattern=r"^[0-9a-f]{128}$")
+    signature: str = Field(pattern=PROFILE_SIG)
     showing: str = Field(max_length=4096)
 
 
@@ -215,8 +238,23 @@ class Portfolio:
                 """CREATE TABLE IF NOT EXISTS portfolio_challenges (
                     nonce TEXT PRIMARY KEY, pubkey TEXT NOT NULL, message TEXT NOT NULL,
                     expires INTEGER NOT NULL)""",
+                # Keys a signing extension authorized to sign owner requests.
+                """CREATE TABLE IF NOT EXISTS portfolio_sessions (
+                    session_pubkey TEXT PRIMARY KEY, pubkey TEXT NOT NULL,
+                    expires INTEGER NOT NULL, created INTEGER NOT NULL)""",
+                "CREATE INDEX IF NOT EXISTS portfolio_sessions_owner ON portfolio_sessions(pubkey)",
+                # A Nostr collection's NIP-44-encrypted root secret; write-once
+                # per check value (a hash of the secret).
+                """CREATE TABLE IF NOT EXISTS portfolio_vaults (
+                    pubkey TEXT PRIMARY KEY, ciphertext TEXT NOT NULL,
+                    vault_check TEXT NOT NULL, updated INTEGER NOT NULL)""",
             ):
                 await conn.execute(statement)
+            columns = await conn.fetchall("PRAGMA table_info(portfolio_profiles)")
+            if "nostr" not in {c["name"] for c in columns}:
+                await conn.execute(
+                    "ALTER TABLE portfolio_profiles ADD COLUMN nostr INTEGER NOT NULL DEFAULT 0"
+                )
 
     async def capacity(self, conn: Connection, pubkey: str, image_size: int) -> None:
         profile = await conn.fetchone(
@@ -386,8 +424,29 @@ class Portfolio:
             )
             return {
                 **dict(profile),
+                "nostr": bool(profile["nostr"]),
                 "cards": [self.public_card(dict(r), owner=False) for r in rows],
             }
+
+    async def store_vault(
+        self, conn: Connection, pubkey: str, vault: VaultRequest
+    ) -> None:
+        """Write-once: a vault can be re-stored only with the same check value."""
+        row = await conn.fetchone(
+            "SELECT vault_check FROM portfolio_vaults WHERE pubkey=:p", {"p": pubkey}
+        )
+        if row is not None and row["vault_check"] != vault.check:
+            raise HTTPException(409, "This collection already has another wallet key.")
+        await conn.execute(
+            """INSERT INTO portfolio_vaults(pubkey,ciphertext,vault_check,updated)
+            VALUES(:p,:c,:k,:t) ON CONFLICT(pubkey) DO UPDATE SET ciphertext=:c, updated=:t""",
+            {
+                "p": pubkey,
+                "c": vault.ciphertext,
+                "k": vault.check,
+                "t": int(time.time()),
+            },
+        )
 
     async def pending_cards(self, pubkey: str) -> List[str]:
         rows = await self.db.fetchall(
@@ -590,9 +649,16 @@ def create_portfolio_app(
             chunks.append(chunk)
         return b"".join(chunks)
 
-    async def authorize(request: Request, pubkey: str, body: bytes) -> None:
-        key = validate_pubkey(pubkey)
+    async def authorize(
+        request: Request, pubkey: str, body: bytes, sessions: bool = True
+    ) -> None:
+        """A single-use challenge signed by the profile key (raw, or an event
+        from a signing extension) or, with X-Portfolio-Session, by a live
+        session key the profile key authorized."""
+        validate_pubkey(pubkey)
         nonce = request.headers.get("X-Portfolio-Challenge", "")
+        session = request.headers.get("X-Portfolio-Session")
+        signature = request.headers.get("X-Portfolio-Signature", "")
         target = request.url.path + (
             "?" + request.url.query if request.url.query else ""
         )
@@ -616,15 +682,25 @@ def create_portfolio_app(
                 nonce,
                 row["expires"],
             )
-            try:
-                signature = bytes.fromhex(
-                    request.headers.get("X-Portfolio-Signature", "")
+            digest = hashlib.sha256(expected.encode()).digest()
+            if session is None:
+                valid = verify_signature(pubkey, "auth", digest, signature)
+            else:
+                if not sessions:
+                    raise HTTPException(
+                        403, "This action needs a signature from the profile key."
+                    )
+                live = re.fullmatch(r"[0-9a-f]{64}", session) and await conn.fetchone(
+                    """SELECT session_pubkey FROM portfolio_sessions
+                        WHERE session_pubkey=:s AND pubkey=:p AND expires>:now""",
+                    {"s": session, "p": pubkey, "now": int(time.time())},
                 )
-                valid = len(signature) == 64 and key.verify(
-                    signature, hashlib.sha256(expected.encode()).digest()
-                )
-            except ValueError:
-                valid = False
+                if not live:
+                    raise HTTPException(401, "Your sign-in has expired. Sign in again.")
+                # Session keys live in the page and sign raw.
+                valid = re.fullmatch(
+                    r"[0-9a-f]{128}", signature
+                ) is not None and verify_signature(session, "auth", digest, signature)
             if row["message"] != expected or not valid:
                 raise HTTPException(
                     403, "This action needs a valid signature from the profile key."
@@ -699,14 +775,106 @@ def create_portfolio_app(
                 if count is not None and count["n"] >= 1000:
                     raise HTTPException(409, "The mint has reached its profile limit.")
                 await conn.execute(
-                    "INSERT INTO portfolio_profiles VALUES(:p,:name,:t)",
+                    """INSERT INTO portfolio_profiles(pubkey,name,created,nostr)
+                    VALUES(:p,:name,:t,:nostr)""",
                     {
                         "p": pubkey,
                         "name": body.name.strip() or "Collector",
                         "t": int(time.time()),
+                        "nostr": int(body.vault is not None),
                     },
                 )
+                if body.vault is not None:
+                    await portfolio.store_vault(conn, pubkey, body.vault)
         return await portfolio.profile(pubkey)
+
+    @app.post("/api/profiles/{pubkey}/session")
+    async def create_session(pubkey: str, request: Request):
+        raw = await read_body(request, 512)
+        # Only the profile key itself, never another session, adds a session.
+        await authorize(request, pubkey, raw, sessions=False)
+        try:
+            body = SessionRequest.model_validate_json(raw)
+            PublicKeyXOnly(bytes.fromhex(body.session_pubkey))
+        except (ValidationError, ValueError):
+            raise HTTPException(400, "Invalid session key.")
+        now = int(time.time())
+        if not now < body.expires <= now + SESSION_TTL:
+            raise HTTPException(400, "A sign-in lasts at most 30 days.")
+        async with portfolio.db.get_connection(
+            locks=[LockOptions(table="portfolio_sessions")]
+        ) as conn:
+            await conn.execute(
+                "DELETE FROM portfolio_sessions WHERE expires<=:now", {"now": now}
+            )
+            taken = await conn.fetchone(
+                "SELECT pubkey FROM portfolio_sessions WHERE session_pubkey=:s",
+                {"s": body.session_pubkey},
+            )
+            if taken is not None and taken["pubkey"] != pubkey:
+                raise HTTPException(409, "Invalid session key.")
+            await conn.execute(
+                """INSERT INTO portfolio_sessions(session_pubkey,pubkey,expires,created)
+                VALUES(:s,:p,:e,:t) ON CONFLICT(session_pubkey) DO UPDATE SET expires=:e""",
+                {"s": body.session_pubkey, "p": pubkey, "e": body.expires, "t": now},
+            )
+            # Beyond the cap, the sessions closest to expiry end first.
+            await conn.execute(
+                """DELETE FROM portfolio_sessions WHERE pubkey=:p AND session_pubkey NOT IN (
+                SELECT session_pubkey FROM portfolio_sessions WHERE pubkey=:p
+                ORDER BY expires DESC LIMIT :n)""",
+                {"p": pubkey, "n": MAX_SESSIONS},
+            )
+        return {"session_pubkey": body.session_pubkey, "expires": body.expires}
+
+    @app.post("/api/profiles/{pubkey}/session/revoke")
+    async def revoke_session(pubkey: str, request: Request):
+        raw = await read_body(request, 256)
+        await authorize(request, pubkey, raw)
+        try:
+            body = RevokeRequest.model_validate_json(raw)
+        except ValidationError:
+            raise HTTPException(400, "Invalid session key.")
+        await portfolio.db.execute(
+            "DELETE FROM portfolio_sessions WHERE session_pubkey=:s AND pubkey=:p",
+            {"s": body.session_pubkey, "p": pubkey},
+        )
+        return {"ok": True}
+
+    @app.post("/api/profiles/{pubkey}/vault/get")
+    async def get_vault(pubkey: str, request: Request):
+        await authorize(request, pubkey, await read_body(request, 0))
+        row = await portfolio.db.fetchone(
+            "SELECT ciphertext, vault_check FROM portfolio_vaults WHERE pubkey=:p",
+            {"p": pubkey},
+        )
+        if row is None:
+            raise HTTPException(404, "No wallet key is stored for this collection.")
+        return {"ciphertext": row["ciphertext"], "check": row["vault_check"]}
+
+    @app.post("/api/profiles/{pubkey}/vault")
+    async def put_vault(pubkey: str, request: Request):
+        raw = await read_body(request, 2048)
+        await authorize(request, pubkey, raw)
+        try:
+            body = VaultRequest.model_validate_json(raw)
+        except ValidationError:
+            raise HTTPException(400, "Invalid wallet key backup.")
+        async with portfolio.db.get_connection(
+            locks=[
+                LockOptions(table="portfolio_profiles"),
+                LockOptions(table="portfolio_vaults"),
+            ]
+        ) as conn:
+            profile = await conn.fetchone(
+                "SELECT nostr FROM portfolio_profiles WHERE pubkey=:p", {"p": pubkey}
+            )
+            if profile is None:
+                raise HTTPException(404, "Create this collection first.")
+            if not profile["nostr"]:
+                raise HTTPException(409, "This collection uses its own key.")
+            await portfolio.store_vault(conn, pubkey, body)
+        return {"ok": True}
 
     @app.get("/api/profiles/{pubkey}")
     async def get_profile(pubkey: str):
@@ -865,8 +1033,8 @@ def create_portfolio_app(
         async with portfolio.db.get_connection(locks=CARD_LOCKS) as conn:
             await portfolio.reconcile(conn, pubkey)
             row = await portfolio.owned_card(conn, pubkey, card_id)
-            if body.showing != row["showing"] or not validate_pubkey(pubkey).verify(
-                bytes.fromhex(body.signature), claim_digest(body.showing)
+            if body.showing != row["showing"] or not verify_signature(
+                pubkey, "claim", claim_digest(body.showing), body.signature
             ):
                 raise HTTPException(
                     403, "The profile signature does not match this ownership proof."

@@ -1,4 +1,4 @@
 {
   "compilerOptions": { "target": "ES2022", "module": "ESNext", "moduleResolution": "Bundler", "lib": ["ES2022", "DOM"], "strict": true, "skipLibCheck": true, "allowJs": true, "checkJs": false, "noEmit": true, "allowImportingTsExtensions": true },
-  "include": ["src/wallet/**/*.ts", "src/money/**/*.ts", "src/market/**/*.ts"]
+  "include": ["src/wallet/**/*.ts", "src/money/**/*.ts", "src/market/**/*.ts", "src/signer.ts", "src/identity.ts", "src/nostr.ts"]
 }

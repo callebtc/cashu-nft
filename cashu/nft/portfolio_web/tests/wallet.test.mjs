@@ -10,7 +10,8 @@ import { crc32, splitPng, transferPng } from '../src/wallet/png.ts';
 import { splitImage, transferImage } from '../src/wallet/image.ts';
 import { ACCEPT, LABELS, fileFormat, formatOf, withoutExtension } from '../src/formats.mjs';
 import { profileKey, verifyCard } from '../src/crypto.mjs';
-import { openWallet } from '../src/wallet/index.ts';
+import { closeWallet, openWallet } from '../src/wallet/index.ts';
+import { keyProfile, localSigner } from '../src/signer.ts';
 
 const fixture = JSON.parse(readFileSync(new URL('./fixtures/wallet.json', import.meta.url)));
 const jpg = Uint8Array.from(Buffer.from(fixture.jpg, 'base64'));
@@ -80,8 +81,8 @@ test('the format dispatcher reads the first bytes and covers every format', () =
   assert.equal(withoutExtension('notes.txt'), 'notes.txt');
 });
 
-test('browser-generated showings bind the collector and fail for another profile', () => {
-  const card = {pubkey, h:fixture.credential.h, ...publicCard(fixture.credential, secret, pubkey)};
+test('browser-generated showings bind the collector and fail for another profile', async () => {
+  const card = {pubkey, h:fixture.credential.h, ...await publicCard(fixture.credential, localSigner(secret))};
   assert.equal(verifyCard(card, pubkey, fixture.config).valid, true);
   assert.equal(verifyCard(card, profileKey('44'.repeat(32)), fixture.config).valid, false);
   assert.throws(() => verifyCredential({...fixture.credential, s:'00'.repeat(32)}, fixture.config));
@@ -89,9 +90,9 @@ test('browser-generated showings bind the collector and fail for another profile
 });
 
 test('authenticated encryption binds owner, keyset and card and survives another vault', async () => {
-  const vault = new EncryptedVault(secret, fixture.config.keyset_id);
-  const other = new EncryptedVault('44'.repeat(32), fixture.config.keyset_id);
-  const restored = new EncryptedVault(secret, fixture.config.keyset_id);
+  const vault = new EncryptedVault(secret, pubkey, fixture.config.keyset_id);
+  const other = new EncryptedVault('44'.repeat(32), profileKey('44'.repeat(32)), fixture.config.keyset_id);
+  const restored = new EncryptedVault(secret, pubkey, fixture.config.keyset_id);
   try {
     const envelope = await vault.encrypt(fixture.credential, 'card:example');
     assert.equal(JSON.stringify(envelope).includes(fixture.credential.s), false);
@@ -115,4 +116,29 @@ test('real Coco initializes the PS extension with the overridden cashu-ts rc.11'
   assert.equal(manager.ext.nft, wallet);
   assert.equal(wallet.pubkey, pubkey);
   await manager.dispose();
+});
+
+test('signing in again gives the open NFT wallet the new session', async () => {
+  globalThis.location = {origin:'https://wallet.test'};
+  // A Nostr collection signs owner requests with a session key; logging out
+  // revokes it, so a later sign-in must not keep using the old one.
+  const base = keyProfile('5a'.repeat(32)), seen = [];
+  const session = (tag) => ({...base, signer: {...base.signer, auth: async (m) => { seen.push(tag); return base.signer.auth(m); }}});
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async (url, init) => {
+    if (String(url).endsWith('/api/auth/challenge')) {
+      const b = JSON.parse(init.body);
+      return Response.json({nonce:'n', expires:1, message:`Cashu_NFT_Portfolio_Auth_v1\n${b.pubkey}\nPOST\n${b.path}\n${b.body_hash}\nn\n1`});
+    }
+    if (String(url).endsWith('/wallet/recover')) return Response.json({cards:[], operations:[]});
+    throw new Error('unexpected request ' + url);
+  };
+  try {
+    const first = await openWallet(session('old'), fixture.config);
+    await first.wallet.recover();
+    const second = await openWallet(session('new'), fixture.config);
+    await second.wallet.recover();
+    assert.deepEqual(seen, ['old', 'new']);
+    await closeWallet(base.pubkey);
+  } finally { globalThis.fetch = realFetch; }
 });

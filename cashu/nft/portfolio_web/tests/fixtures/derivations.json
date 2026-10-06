@@ -1,0 +1,27 @@
+{
+  "secret": "7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a",
+  "pubkey": "e05ce435e462ec503143305feb6c00e06a3ad52fbf939e85c65f3a765bb7baac",
+  "keyset": "0365aa3e81e240e6fb5fdd0a6035eda65c61bb2c6037e52754c0c4d5983c04d603",
+  "wallet_seed": "382f492522f4154c12fef11de085b86d05ef5f3661f0fdc7590895bd198c0990b8ead99542acfb9715f258494eb4d00dcb05e364b9363527598d21f5c8323401",
+  "money_seed": "ac920f1aee451e87616f659c61387d859f0c28bc738195c996ba7f654315dfd7c4b8ef661b54b070cce1928698b712236d2932e4b93c822ff74963681d78dae4",
+  "authorization": {
+    "claim:00ff": "29066b409c77ff0712603c122f7944588c59857ed507b85b22f6ffb3f7fafd51",
+    "refund:abcd": "b96eb595f327bd710b4ae7e2c99a6b831a77b8feb0c090eb91a8fe5769fabe12",
+    "receive:abcd": "981d150971c66948adc887ff398faff374c72bb10c1a00159500d7005c75b9f5"
+  },
+  "vault_envelope": {
+    "version": 1,
+    "nonce": "c6e7a65c6487872dcb74d12e",
+    "ciphertext": "8f218256b2942592626dc9767970e33b564a5558e0acdbef30c9a5b763e6107662"
+  },
+  "snapshot_envelope": {
+    "version": "1",
+    "nonce": "e24299ae14ad8d29a93e28d4",
+    "ciphertext": "261ef2bd1ffceed5872f70896d20c76ed97d9f0f1f37c4a6f665af31056038b2fe12b400"
+  },
+  "journal_envelope": {
+    "version": "1",
+    "nonce": "1a14f1ee2d9cf2ab8d0268a7",
+    "ciphertext": "1f6f5286680d625a9c72c65c3fb1859a39ed96e5375763dd9246ec475b91fe503d4a30"
+  }
+}

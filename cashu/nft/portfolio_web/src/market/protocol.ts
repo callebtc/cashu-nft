@@ -8,6 +8,7 @@ import { sha256 } from '@noble/hashes/sha2.js';
 import { bytesToHex, concatBytes, hexToBytes } from '@noble/hashes/utils.js';
 import { dlog, g1, integer, utf8 } from '../wallet/ps.ts';
 import { sealPreimage } from './escrow.mjs';
+import type { SignOptions, Signer } from '../signer.ts';
 
 export const PROTOCOL = 'cashu-nft-offer-1';
 export const LISTING_PROTOCOL = 'cashu-nft-listing-1';
@@ -61,12 +62,11 @@ export const listingHash = (l: ListingManifest) => digest(LISTING_DOMAIN, l);
 export const acceptanceHash = (a: Acceptance) => digest(ACCEPT_DOMAIN, a);
 export const receiptHash = (r: DeliveryReceipt) => digest(RECEIPT_DOMAIN, r);
 
-function signPurpose(domain: string, hash: Uint8Array, secret: string): string {
-  return bytesToHex(schnorr.sign(sha256(concatBytes(utf8(domain), hash)), hexToBytes(secret)));
-}
-export const signListing = (l: ListingManifest, secret: string) => signPurpose(LISTING_DOMAIN, listingHash(l), secret);
-export const signOffer = (m: OfferManifest, secret: string) => signPurpose(OFFER_SIG_DOMAIN, manifestHash(m), secret);
-export const signAcceptance = (a: Acceptance, secret: string) => signPurpose(ACCEPT_DOMAIN, acceptanceHash(a), secret);
+/** Profile signatures sign SHA256(domain || hash) (market_protocol.sign_purpose). */
+const purposeDigest = (domain: string, hash: Uint8Array) => sha256(concatBytes(utf8(domain), hash));
+export const signListing = (l: ListingManifest, signer: Signer, opts?: SignOptions) => signer.sign('listing', purposeDigest(LISTING_DOMAIN, listingHash(l)), opts);
+export const signOffer = (m: OfferManifest, signer: Signer, opts?: SignOptions) => signer.sign('offer', purposeDigest(OFFER_SIG_DOMAIN, manifestHash(m)), opts);
+export const signAcceptance = (a: Acceptance, signer: Signer, opts?: SignOptions) => signer.sign('accept', purposeDigest(ACCEPT_DOMAIN, acceptanceHash(a)), opts);
 
 export function verifyReceipt(receipt: DeliveryReceipt, signature: string, publicKey: string): boolean {
   try { return schnorr.verify(hexToBytes(signature), receiptHash(receipt), hexToBytes(publicKey)); } catch { return false; }

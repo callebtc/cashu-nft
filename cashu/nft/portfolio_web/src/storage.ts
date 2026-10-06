@@ -75,4 +75,11 @@ export async function openRecordStore(database: string, store: string): Promise<
 export const local = {
   get(key: string): string | null { try { return localStorage.getItem(key); } catch { return null; } },
   set(key: string, value: string) { try { localStorage.setItem(key, value); } catch { /* blocked */ } },
+  remove(key: string) { try { localStorage.removeItem(key); } catch { /* blocked */ } },
+};
+/** sessionStorage (this tab only) that never throws. */
+export const tab = {
+  get(key: string): string | null { try { return sessionStorage.getItem(key); } catch { return null; } },
+  set(key: string, value: string) { try { sessionStorage.setItem(key, value); } catch { /* blocked */ } },
+  remove(key: string) { try { sessionStorage.removeItem(key); } catch { /* blocked */ } },
 };

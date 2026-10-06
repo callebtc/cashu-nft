@@ -41,6 +41,39 @@ export function signMessage(secret, message) {
 export function signClaim(secret, showing) {
   return signMessage(secret, 'Cashu_NFT_Portfolio_Claim_v1\n' + showing);
 }
+export const claimDigest = (showing) => sha256(textBytes('Cashu_NFT_Portfolio_Claim_v1\n' + showing));
+
+// Profile signatures from a Nostr signing extension (NIP-07), which can only
+// sign events: an event of this kind whose `x` tag is the digest a raw key
+// would sign. Its content is a fixed label per purpose, shown in the
+// extension's prompt. Mirrors cashu/nft/nostr_sig.py.
+export const SIG_KIND = 27711;
+export const SIG_LABELS = {
+  auth: 'Sign in to Nonfungible.cash',
+  claim: 'Publish an NFT to your Nonfungible.cash collection',
+  listing: 'List an NFT for sale on Nonfungible.cash',
+  offer: 'Make an offer on Nonfungible.cash',
+  accept: 'Accept an offer on Nonfungible.cash',
+};
+export function signatureEvent(pubkey, purpose, digest, created_at) {
+  if (!Object.hasOwn(SIG_LABELS, purpose)) throw new Error('Unknown signature purpose');
+  return { pubkey, created_at, kind: SIG_KIND, tags: [['x', bytesToHex(digest)]], content: SIG_LABELS[purpose] };
+}
+/** NIP-01 event id. */
+export function eventHash(event) {
+  return sha256(textBytes(JSON.stringify([0, event.pubkey, event.created_at, event.kind, event.tags, event.content])));
+}
+/** Encodes an extension-signed event as a profile signature. */
+export const eventSignature = (event) => `n1:${event.created_at}:${event.sig}`;
+/** A raw BIP-340 signature over `digest`, or an extension-signed event that commits to it. */
+export function verifySignature(pubkey, purpose, digest, signature) {
+  try {
+    if (/^[0-9a-f]{128}$/.test(signature)) return schnorr.verify(hexToBytes(signature), digest, hexToBytes(pubkey));
+    const event = /^n1:(0|[1-9][0-9]{0,9}):([0-9a-f]{128})$/.exec(signature || '');
+    if (!event) return false;
+    return schnorr.verify(hexToBytes(event[2]), eventHash(signatureEvent(pubkey, purpose, digest, Number(event[1]))), hexToBytes(pubkey));
+  } catch { return false; }
+}
 export function expectedContext(pubkey, h, keyset) {
   return `Cashu_NFT_Portfolio_Show_v1\n${pubkey}\n${h}\n${keyset}`;
 }
@@ -89,9 +122,7 @@ export function verifyCard(card, expectedPubkey, config) {
     ]);
     if (!bls.fields.Fp12.eql(paired, bls.fields.Fp12.ONE)) throw new Error('Invalid mint signature');
     if (!card.signature) return { valid: false, pending: true, reason: 'Awaiting profile signature' };
-    if (!schnorr.verify(hexToBytes(card.signature), sha256(textBytes('Cashu_NFT_Portfolio_Claim_v1\n' + card.showing)), hexToBytes(expectedPubkey))) {
-      throw new Error('Invalid profile signature');
-    }
+    if (!verifySignature(expectedPubkey, 'claim', claimDigest(card.showing), card.signature)) throw new Error('Invalid profile signature');
     return { valid: true, nullifier: bytesToHex(N.toBytes(true)) };
   } catch (error) {
     return { valid: false, reason: error.message };

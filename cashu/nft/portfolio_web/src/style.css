@@ -306,6 +306,15 @@ button.nft-card:hover .nft-media img, .is-preview:hover .nft-media svg { transfo
 .notice { display: flex; align-items: center; gap: 10px; margin-bottom: 16px; padding: 10px 12px 10px 14px; border-radius: var(--radius-sm); border: 2px solid #111; background: var(--yellow); color: #111; font-size: 14px; font-weight: 650; }
 .notice > div { flex: 1; }
 .notice-bad { background: var(--bad-bg); color: #fff; }
+/* Sign-in and pending-signature notices under the top bar. */
+.session-notices { width: 100%; max-width: 1240px; margin: 16px auto 0; padding: 0 24px; display: flex; flex-direction: column; gap: 8px; }
+.session-notices .notice { margin-bottom: 0; }
+/* Nostr login (login.jsx). */
+.or-rule { display: flex; align-items: center; gap: 12px; color: var(--muted); font-size: 12px; font-weight: 750; text-transform: uppercase; letter-spacing: .04em; }
+.or-rule::before, .or-rule::after { content: ''; flex: 1; height: 2px; border-radius: 2px; background: currentColor; opacity: .35; }
+.nostr-missing { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 6px 12px; min-height: 54px; padding: 8px 14px; border-radius: 999px; border: 2px dashed var(--ink); text-align: center; }
+.badge-nostr { background: #8e44ff; color: #fff; }
+.nostr-import { align-self: flex-start; }
 .tabs-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 26px; }
 .tabs { display: inline-flex; gap: 4px; padding: 4px; border-radius: 999px; border: 2px solid var(--ink); background: var(--paper); box-shadow: 3px 3px 0 var(--ink); }
 .tab { position: relative; display: inline-flex; align-items: center; gap: 8px; height: 38px; padding: 0 16px; border-radius: 999px; font-weight: 750; font-size: 14px; z-index: 0; transition: color .2s; }
@@ -581,7 +590,7 @@ button.stat { text-align: left; cursor: pointer; }
   .profile-actions { grid-column: 1 / -1; flex-wrap: wrap; }
 }
 @media (max-width: 640px) {
-  .page { padding: 0 14px; }
+  .page, .session-notices { padding: 0 14px; }
   .hero-card, .story-card { padding: 28px 20px; border-radius: 24px; }
   .hero-stage { height: 320px; }
   .stage-card { width: 52%; }

@@ -89,8 +89,9 @@ function Cryptography({ onStart }) {
         <motion.section id="trust" {...reveal}>
           <h2><span className="mono">05</span>Keys, custody and trust</h2>
           <dl className="facts">
-            <div><dt>Profile key</dt><dd>A secp256k1 key generated in your browser. It signs every owner request against a single-use challenge, and signs every showing. It is never sent to the server.</dd></div>
-            <div><dt>Credentials</dt><dd>Kept in your browser, encrypted with AES-256-GCM under a key derived by HKDF from your profile key and the mint keyset. The mint stores only ciphertext backups; importing your key restores them.</dd></div>
+            <div><dt>Profile key</dt><dd>A secp256k1 key generated in your browser, or your Nostr key. It signs every owner request against a single-use challenge, and signs every showing. It is never sent to the server.</dd></div>
+            <div><dt>Nostr login</dt><dd>A signing extension (NIP-07) never reveals your key, so it authorizes a session key for owner requests once, and signs each showing, listing and offer as a Nostr event that commits to the same digest. Your wallets derive from a random wallet key, NIP-44-encrypted to your Nostr key and stored on the server and your relays.</dd></div>
+            <div><dt>Credentials</dt><dd>Kept in your browser, encrypted with AES-256-GCM under a key derived by HKDF from your profile key (for Nostr collections, the wallet key) and the mint keyset. The mint stores only ciphertext backups; importing your key restores them.</dd></div>
             <div><dt>Mint identity</dt><dd>The keyset ID is a SHA-256 commitment to the mint's public parameters. Your browser pins it on first visit and refuses to continue if it changes.</dd></div>
             <div><dt>What you still trust</dt><dd>The mint can issue credentials it shouldn't and can refuse service. The JavaScript served to you could be malicious. This is experimental, unaudited cryptography.</dd></div>
           </dl>
