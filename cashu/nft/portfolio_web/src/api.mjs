@@ -15,6 +15,11 @@ export async function getJSON(path) { return (await checked(await fetch(path, { 
  *  @param {string} [contentType] @param {string} [origin] @param {Record<string, string>} [headers] */
 export async function signedRequest(signer, path, body = new Uint8Array(), contentType = 'application/octet-stream', origin = '', headers = {}) {
   const bytes = typeof body === 'string' ? new TextEncoder().encode(body) : body;
+  // Sign the path exactly as fetch sends it: the URL parser escapes some
+  // characters encodeURIComponent keeps (' in a query becomes %27), and the
+  // server checks the signature against the path it receives.
+  const url = new URL(path, 'https://portfolio.invalid');
+  path = url.pathname + url.search;
   signer = asSigner(signer);
   const pubkey = signer.pubkey;
   const challenge = await (await checked(await fetch(origin + '/api/auth/challenge', {

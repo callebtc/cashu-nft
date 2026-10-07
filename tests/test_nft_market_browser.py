@@ -25,6 +25,7 @@ import uvicorn
 from cashu.nft import market_protocol as mp
 from cashu.nft.portfolio import create_portfolio_app
 from tests.conftest import SERVER_ENDPOINT
+from tests.test_nft_portfolio import make_jpg
 
 WEB = Path(__file__).resolve().parents[1] / "cashu" / "nft" / "portfolio_web"
 
@@ -136,6 +137,19 @@ async def test_browser_one_request_issuance_and_recovery(
     rows = await server.db.fetchall("SELECT * FROM ps_issue_sessions")
     assert len(rows) == 1 and rows[0]["session"].startswith("v3:")
     assert len(await server.db.fetchall("SELECT * FROM ps_asset_tags")) == 1
+
+
+@pytest.mark.asyncio
+async def test_browser_mints_titles_the_url_parser_escapes(server, tmp_path):
+    # encodeURIComponent keeps ' but fetch sends it as %27; the signed path
+    # must be the one the server receives.
+    picture = tmp_path / "picture.jpg"
+    picture.write_bytes(make_jpg())
+    title = "you wouldn't mint an HTLC"
+    result = await server.browser(
+        "image_mint", secret=key(), path=str(picture), title=title
+    )
+    assert result["minted"]["title"] == title
 
 
 @pytest.mark.asyncio
