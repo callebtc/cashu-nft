@@ -1006,8 +1006,8 @@ and `make check` clean.
   "IndexedDB API missing". `src/storage.ts` probes IndexedDB once. Without it,
   the credential vault, the ecash wallet's local records and Coco's
   repositories run in memory. Every open restores from the encrypted server
-  backups. In memory mode the ecash snapshot is pushed to the server about
-  250 ms after each change, not every 30 s. The device id is kept in
+  backups. The ecash snapshot is pushed to the server about 250 ms after each
+  change (since the closed-tab fix below, in every mode). The device id is kept in
   localStorage so a reload keeps its own lease. The owner's profile and the
   wallet page show a notice. localStorage access is wrapped so blocked
   storage cannot throw. Covered by `tests/storage.test.mjs`, which runs with
@@ -1052,6 +1052,28 @@ and `make check` clean.
 - **Unlimited collections.** `NFT_PORTFOLIO_MAX_CARDS` is now opt-in. Unset, a
   collection has no card limit; image storage and JPG size are still capped,
   and unfinished wallet actions per profile stay bounded (100).
+- **Closed tab, stale backup.** With IndexedDB, the ecash snapshot reached the
+  server only every 30 s and on dispose, which a closed tab never runs. A new
+  browser restoring from the private key then opened an older wallet, or an
+  empty one, still listing ecash the mint had already spent.
+  - Each saved change is now pushed about 250 ms later. Changes saved in that
+    window go in one push, and one push runs at a time.
+  - The device remembers the server's revision, so a push is a single signed
+    put, not a read and then a put.
+  - A newer local snapshot is pushed when the wallet opens again, but only
+    over a backup this device wrote last.
+  - Hiding the tab or `pagehide` pushes too. The put uses `keepalive` below
+    64 KB.
+  - A push needs two round trips, longer than a closing tab gets. While one is
+    due, `beforeunload` asks before leaving and the push finishes meanwhile.
+  - Covered by `money.test.mjs` and
+    `test_browser_closed_tab_restores_on_a_new_browser`. Checked in Chrome,
+    driving the app UI: create a collection, mint, top up 100, send 21, then
+    close the tab at once.
+    - Before: the server had no backup, and the new browser's wallet was empty.
+    - After: leaving prompted. Staying a second let the push land. The new
+      browser restored the collection, the NFT and 79 sats, and spent 5.
+    - Closing 2 s after the send gave no prompt and the same result.
 
 ## Offer funding and coin reservations (2026-10-03)
 

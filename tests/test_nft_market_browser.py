@@ -304,6 +304,26 @@ async def test_browser_ordinary_wallet_token_round_trip_and_lease(server):
 
 
 @pytest.mark.asyncio
+async def test_browser_closed_tab_restores_on_a_new_browser(server):
+    """A tab closed right after a change leaves the change at the server: a
+    new browser with only the private key sees the collection, its NFT and
+    the ecash, and can spend both."""
+    secret = key()
+    closed = await server.browser("close_tab", secret=secret, amount=50)
+    assert closed["balance"]["available"] == 50
+    assert closed["backupRevision"] == closed["revision"] > 0
+
+    fresh = await server.browser("new_browser", secret=secret)
+    assert fresh["name"] == "Closer"
+    assert [c["id"] for c in fresh["cards"]] == [closed["minted"]["id"]]
+    assert fresh["recovered"]["cards"] == 1 and fresh["transfer"] is True
+    # The closed tab still holds the lease until it expires; the balance is
+    # visible right away and spendable after "Use it here".
+    assert fresh["readOnly"] is True and fresh["before"]["available"] == 50
+    assert fresh["tookOver"] is True and fresh["after"]["available"] == 45
+
+
+@pytest.mark.asyncio
 async def test_browser_recovers_purchase_without_journal(server):
     """The journal is the normal recovery path, but s' is derived from the
     profile key and offer id, so a buyer whose encrypted journal is gone

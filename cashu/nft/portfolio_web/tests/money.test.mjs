@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import 'fake-indexeddb/auto';
+import { IDBFactory } from 'fake-indexeddb';
 import { Amount, Mint, Wallet } from '@cashu/cashu-ts';
 import { MemoryRepositories } from '@cashu/coco-core';
 import { installCocoCompat } from '../src/money/compat.ts';
@@ -40,6 +41,73 @@ test('encrypted repositories persist, reopen and never store plaintext', async (
     assert.equal(await r.counterRepository.getCounter('https://mint.test', 'keyset'), null);
     await r.close(); throw new Error('isolated');
   }), /isolated/);
+});
+
+/** A server backup and lease as /money/backup and /money/lease keep them. */
+function fakeRemote() {
+  const remote = {
+    backup: { revision: 0, envelope: null }, pushes: 0, offline: false,
+    async lease(device) { return { granted: true, holder: device, until: Date.now() / 1000 + 600 }; },
+    async get() { if (remote.offline) throw new TypeError('offline'); return remote.backup; },
+    async put(device, base, revision, envelope) {
+      if (remote.offline) throw new TypeError('offline');
+      assert.equal(base, remote.backup.revision);
+      remote.backup = { revision, envelope, device }; remote.pushes++;
+      return { revision };
+    },
+  };
+  return remote;
+}
+
+test('every saved change reaches the server backup before the tab closes', async () => {
+  const key = '77'.repeat(32), remote = fakeRemote();
+  const tab = await EncryptedRepositories.open(key, profileKey(key), remote);
+  assert.equal(tab.ephemeral, false);
+  assert.equal(await tab.acquireLease(), true);
+  assert.equal(tab.unsynced, false);
+  await tab.counterRepository.setCounter('https://mint.test', 'keyset', 9);
+  assert.equal(tab.unsynced, true, 'saved here, not yet at the server: closing now asks first');
+  await tab.flushed();
+  assert.equal(tab.unsynced, false);
+  assert.equal(remote.backup.revision, tab.revision);
+  assert.equal(remote.backup.device, tab.device);
+  // The tab closes: no close(), no dispose. A new browser restores from the key.
+  const saved = globalThis.indexedDB;
+  globalThis.indexedDB = new IDBFactory();
+  try {
+    const fresh = await EncryptedRepositories.open(key, profileKey(key), remote);
+    assert.notEqual(fresh.device, tab.device);
+    assert.equal((await fresh.counterRepository.getCounter('https://mint.test', 'keyset')).counter, 9);
+    await fresh.close();
+  } finally { globalThis.indexedDB = saved; }
+});
+
+test('a change the closed tab could not push goes up when the wallet opens again', async () => {
+  const key = '78'.repeat(32), remote = fakeRemote();
+  const tab = await EncryptedRepositories.open(key, profileKey(key), remote);
+  await tab.acquireLease();
+  await tab.counterRepository.setCounter('https://mint.test', 'keyset', 1);
+  await tab.flushed();
+  remote.offline = true;
+  await tab.counterRepository.setCounter('https://mint.test', 'keyset', 2);
+  await tab.flushed();
+  assert.ok(remote.backup.revision < tab.revision);
+  assert.equal(tab.unsynced, true, 'an offline change keeps asking before leaving');
+  remote.offline = false;
+  // The same browser opens the wallet again, before any new change.
+  const again = await EncryptedRepositories.open(key, profileKey(key), remote);
+  await again.acquireLease();
+  await again.flushed();
+  assert.equal(remote.backup.revision, tab.revision);
+
+  // A backup another device wrote since is not overwritten by an older line.
+  remote.backup = { ...remote.backup, revision: 1, device: 'ff'.repeat(16) };
+  const pushes = remote.pushes;
+  const third = await EncryptedRepositories.open(key, profileKey(key), remote);
+  await third.acquireLease();
+  await third.flushed();
+  assert.equal(remote.pushes, pushes);
+  await Promise.all([tab.close(), again.close(), third.close()]);
 });
 
 test('every mutating Coco repository method is native async (the proxy relies on it)', () => {

@@ -145,25 +145,32 @@ export class LocalRecords {
 
 export interface RemoteBackup {
   lease(device: string, takeover?: boolean, release?: boolean): Promise<{ granted: boolean; holder: string; until: number }>;
-  get(): Promise<{ revision: number; envelope: Sealed | null }>;
+  get(): Promise<{ revision: number; envelope: Sealed | null; device?: string }>;
   put(device: string, baseRevision: number, revision: number, envelope: Sealed): Promise<{ revision: number }>;
 }
 
+/** Saves this close together go to the server in one push. */
+const PUSH_DELAY = 250;
 const READ_PREFIXES = ['get', 'is', 'find', 'list', 'has', 'count', 'init'];
 const isRead = (name: string) => READ_PREFIXES.some((p) => name.startsWith(p));
 
 export class EncryptedRepositories extends MemoryRepositories {
   revision = 0;
   device = '';
-  /** True when nothing persists on this device: every change is pushed to the server backup right away. */
+  /** True when nothing persists on this device (memory fallback). */
   ephemeral = false;
-  private syncTimer: ReturnType<typeof setTimeout> | null = null;
   readOnly = false;
   private key!: CryptoKey;
   private local!: LocalRecords;
   private aad = '';
   private remote: RemoteBackup | null = null;
   private writing: Promise<void> = Promise.resolve();
+  private saving = 0;
+  private syncing: Promise<void> = Promise.resolve();
+  private pushing: Promise<void> | null = null;
+  private pushTimer: ReturnType<typeof setTimeout> | null = null;
+  /** The backup revision the server holds, as far as this device knows; -1 when unknown. */
+  private serverRevision = -1;
   private dirtyRemote = false;
   private leaseUntil = 0;
 
@@ -197,10 +204,14 @@ export class EncryptedRepositories extends MemoryRepositories {
   /** Newest of the local and remote snapshots wins. */
   private async load(): Promise<void> {
     const saved = await this.local.get<{ revision: number; envelope: Sealed }>('snapshot');
-    let best = saved ?? null;
+    let best = saved ?? null, behind = false;
     if (this.remote) {
       try {
         const remote = await this.remote.get();
+        this.serverRevision = remote.revision;
+        // Only a backup this device wrote last: if another device wrote
+        // since, the two have diverged and neither overwrites the other here.
+        behind = !!saved && saved.revision > remote.revision && (!remote.envelope || remote.device === this.device);
         if (remote.envelope && remote.revision > (best?.revision ?? -1)) best = { revision: remote.revision, envelope: remote.envelope };
       } catch { /* offline: the local snapshot stands until reconnect */ }
     }
@@ -209,6 +220,9 @@ export class EncryptedRepositories extends MemoryRepositories {
       this.revision = best.revision;
       await this.local.put('snapshot', best);
     }
+    // Saved here but not at the server (the tab closed first): push it once
+    // the lease is ours.
+    this.dirtyRemote = behind;
   }
 
   /** Acquire the single-writer lease. Without it the wallet is read-only here. */
@@ -223,6 +237,7 @@ export class EncryptedRepositories extends MemoryRepositories {
     if (lease.granted && !renewing) {
       // Always continue from the latest backup another device may have written.
       const remote = await this.remote.get();
+      this.serverRevision = remote.revision;
       if (remote.envelope && remote.revision > this.revision) {
         restoreInto(this, await open(this.key, this.aad, remote.envelope));
         this.revision = remote.revision;
@@ -230,6 +245,7 @@ export class EncryptedRepositories extends MemoryRepositories {
       }
     }
     this.readOnly = !lease.granted;
+    if (lease.granted) this.push();
     return lease.granted;
   }
 
@@ -256,29 +272,76 @@ export class EncryptedRepositories extends MemoryRepositories {
 
   /** Serialize writes; each mutation is durable locally before returning. */
   persist(): Promise<void> {
+    this.saving++;
     this.writing = this.writing.then(async () => {
-      const envelope = await seal(this.key, this.aad, snapshotOf(this));
-      this.revision += 1;
-      await this.local.put('snapshot', { revision: this.revision, envelope });
-      this.dirtyRemote = true;
-      if (this.ephemeral && this.remote && !this.syncTimer) {
-        this.syncTimer = setTimeout(() => { this.syncTimer = null; this.sync().catch(() => { this.dirtyRemote = true; }); }, 250);
-      }
+      try {
+        const envelope = await seal(this.key, this.aad, snapshotOf(this));
+        this.revision += 1;
+        await this.local.put('snapshot', { revision: this.revision, envelope });
+        this.dirtyRemote = true;
+        this.push();
+      } finally { this.saving--; }
     });
     return this.writing;
   }
 
+  /** A change on this device the server backup doesn't have yet. */
+  get unsynced(): boolean {
+    return !!this.remote && !this.readOnly && (this.saving > 0 || this.dirtyRemote);
+  }
+
+  /** Saved changes go to the server backup right away, not on the 30 s
+   *  sync: a closed tab or a crash must not leave a newer wallet only on this
+   *  device, where a new browser restoring from the key can't see it. A burst
+   *  of saves (one top-up is a dozen) goes in one push, and one push at a
+   *  time; changes saved meanwhile go in the next one. */
+  private push() {
+    if (!this.remote || this.pushing || this.pushTimer || !this.dirtyRemote || this.readOnly) return;
+    this.pushTimer = setTimeout(() => this.pushNow(), PUSH_DELAY);
+  }
+  private pushNow() {
+    if (this.pushTimer) { clearTimeout(this.pushTimer); this.pushTimer = null; }
+    if (!this.remote || this.pushing || !this.dirtyRemote || this.readOnly) return;
+    const run = (async () => {
+      try { do await this.sync(); while (this.dirtyRemote && !this.readOnly); }
+      catch { /* offline or lease lost: the next change or sync retries */ }
+    })();
+    this.pushing = run;
+    void run.then(() => { if (this.pushing === run) this.pushing = null; });
+  }
+
+  /** Resolves once changes saved so far reached the server (or failed to). */
+  async flushed(): Promise<void> {
+    await this.writing;
+    this.pushNow();
+    while (this.pushing) await this.pushing;
+  }
+
   /** Push the latest snapshot to the server backup. Revisions are numbered
    *  by the writer; the server compares-and-swaps on them. */
-  async sync(): Promise<void> {
+  sync(): Promise<void> {
+    const run = this.syncing.then(() => this.syncOnce());
+    this.syncing = run.catch(() => {});
+    return run;
+  }
+  private async syncOnce(): Promise<void> {
     if (!this.remote || !this.dirtyRemote || this.readOnly) return;
     await this.writing;
     const saved = await this.local.get<{ revision: number; envelope: Sealed }>('snapshot');
     if (!saved) return;
-    const remote = await this.remote.get();
-    if (remote.revision > saved.revision) throw new Error('Another device changed this wallet. Reload before continuing.');
-    if (remote.revision < saved.revision) await this.remote.put(this.device, remote.revision, saved.revision, saved.envelope);
-    this.dirtyRemote = false;
+    if (this.serverRevision < 0) {
+      const remote = await this.remote.get();
+      if (remote.revision > saved.revision) throw new Error('Another device changed this wallet. Reload before continuing.');
+      this.serverRevision = remote.revision;
+    }
+    if (this.serverRevision < saved.revision) {
+      // A refused push (lease lost, another device wrote) re-reads next time.
+      try { await this.remote.put(this.device, this.serverRevision, saved.revision, saved.envelope); }
+      catch (error) { this.serverRevision = -1; throw error; }
+      this.serverRevision = saved.revision;
+    }
+    // A change saved while this one was on its way needs another push.
+    this.dirtyRemote = this.revision > saved.revision;
   }
 
   /** Give up the single-writer lease (closing the wallet on this device). */
@@ -287,8 +350,7 @@ export class EncryptedRepositories extends MemoryRepositories {
   }
 
   async close() {
-    await this.writing;
-    if (this.syncTimer) { clearTimeout(this.syncTimer); this.syncTimer = null; await this.sync().catch(() => {}); }
+    await this.flushed();
     await this.local.close();
   }
 }
