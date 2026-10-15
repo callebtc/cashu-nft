@@ -1,11 +1,12 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
 import { toast } from 'sonner';
-import { ArrowDownToLine, Gavel, Heart, Image as ImageIcon, Search, Sparkles, Tag, UserPlus, UserCheck, Users } from 'lucide-react';
+import { ArrowDownToLine, Gavel, Heart, Image as ImageIcon, Search, Sparkles, Tag, Upload, UserPlus, UserCheck, Users } from 'lucide-react';
 import { getJSON, signedRequest } from './api.mjs';
 import { uploadHeaders } from './turnstile.mjs';
 import { Button, Identicon, Modal, SkeletonCards, SkeletonRows, Spinner, Tilt, identiconColor, setAvatarVersion, useTint } from './ui.jsx';
 import { imageUrl } from './formats.mjs';
+import { BannerCropper, HeaderPreview, PreviewAvatar, ProfileBanner, bannerUrl, defaultDevice, loadBannerSource, releaseBannerSource } from './banner.jsx';
 
 export { imageUrl };
 
@@ -67,7 +68,9 @@ export function FollowButton({ following, onToggle }) {
 }
 
 export function CollectionCard({ item, index = 0, onOpen, liked, onLike, rank }) {
-  const [tint, onLoad] = useTint(item.cover || item.pubkey);
+  // An uploaded banner is the cover; a banner cut from an NFT shows that NFT whole.
+  const uploaded = item.banner && !item.banner_nft ? bannerUrl(item.pubkey, item.banner) : null;
+  const [tint, onLoad] = useTint(uploaded || item.cover || item.pubkey);
   const previews = item.previews?.length ? item.previews : [];
   return <motion.div className="card-slot" initial={{ opacity: 0, y: 18 }} whileInView={{ opacity: 1, y: 0 }} viewport={{ once: true }}
     transition={{ delay: Math.min(index, 8) * .05, type: 'spring', stiffness: 260, damping: 26 }}>
@@ -75,8 +78,9 @@ export function CollectionCard({ item, index = 0, onOpen, liked, onLike, rank })
       <div role="link" tabIndex={0} className="collection-card" style={{ '--tint': tint || identiconColor(item.pubkey) }}
         onClick={() => onOpen(item.pubkey)} onKeyDown={(e) => { if (e.key === 'Enter') onOpen(item.pubkey); }}>
         {rank && <span className="rank">#{rank}</span>}
-        <div className={`collection-cover covers-${item.custom_cover || previews.length < 4 ? 1 : 4}`}>
-          {item.cover ? (item.custom_cover || previews.length < 4
+        <div className={`collection-cover covers-${uploaded || item.custom_cover || previews.length < 4 ? 1 : 4}`}>
+          {uploaded ? <img src={uploaded} alt="" loading="lazy" onLoad={onLoad} />
+            : item.cover ? (item.custom_cover || previews.length < 4
             ? <img src={imageUrl(item.cover)} alt="" loading="lazy" onLoad={onLoad} />
             : previews.map((h, i) => <img key={h} src={imageUrl(h)} alt="" loading="lazy" onLoad={i === 0 ? onLoad : undefined} />))
             : <span className="cover-empty"><ImageIcon size={28} /></span>}
@@ -265,12 +269,21 @@ export async function shrinkPicture(file) {
 export function EditCollectionDialog({ open, close, profile, identity, onSaved }) {
   const [name, setName] = useState(''), [cover, setCover] = useState(''), [saving, setSaving] = useState(false), [importing, setImporting] = useState(false);
   const [picture, setPicture] = useState(null), [removePicture, setRemovePicture] = useState(false), [pictureError, setPictureError] = useState('');
-  const fileRef = useRef(null);
+  // banner: a cropped banner waiting to be saved; autoBanner: back to the mosaic.
+  const [banner, setBanner] = useState(null), [autoBanner, setAutoBanner] = useState(false), [bannerError, setBannerError] = useState('');
+  const [crop, setCrop] = useState(null), [picking, setPicking] = useState(false), [loadingBanner, setLoadingBanner] = useState('');
+  const [device, setDevice] = useState(defaultDevice);
+  const fileRef = useRef(null), bannerFileRef = useRef(null);
   const active = profile?.cards.filter((c) => c.status !== 'sent') || [];
   useEffect(() => {
-    if (open && profile) { setName(profile.name); setCover(profile.custom_cover ? profile.cover : ''); setPicture(null); setRemovePicture(false); setPictureError(''); }
+    if (open && profile) {
+      setName(profile.name); setCover(profile.custom_cover ? profile.cover : ''); setPicture(null); setRemovePicture(false); setPictureError('');
+      setBanner(null); setAutoBanner(false); setBannerError(''); setCrop(null); setPicking(false);
+    }
   }, [open, profile]);
   useEffect(() => () => { if (picture) URL.revokeObjectURL(picture.preview); }, [picture]);
+  useEffect(() => () => { if (banner) URL.revokeObjectURL(banner.preview); }, [banner]);
+  useEffect(() => () => releaseBannerSource(crop), [crop]);
   const choose = async (file) => {
     if (!file) return;
     setPictureError('');
@@ -278,6 +291,30 @@ export function EditCollectionDialog({ open, close, profile, identity, onSaved }
     catch (e) { setPictureError(e.message); }
   };
   const hasPicture = picture || (profile?.avatar && !removePicture);
+  // Uploads and NFTs both go through the cropper; an NFT banner remembers its
+  // NFT, which also becomes the collection's cover on Explore.
+  const cropFrom = async (load, nft = null, key = 'file') => {
+    setBannerError(''); setLoadingBanner(key);
+    try { setCrop({ ...await loadBannerSource(await load()), nft }); }
+    catch (e) { setBannerError(e.message); } finally { setLoadingBanner(''); }
+  };
+  const cropFile = (file) => file && cropFrom(async () => file);
+  const cropNft = (card) => cropFrom(async () => {
+    const response = await fetch(imageUrl(card.h));
+    if (!response.ok) throw new Error('This NFT’s picture can’t be loaded.');
+    return response.blob();
+  }, card.h, card.h);
+  const applied = (result) => {
+    setBanner({ ...result, nft: crop.nft }); setAutoBanner(false); setPicking(false);
+    setCover(crop.nft ?? (profile.custom_cover ? profile.cover : ''));
+    setCrop(null);
+  };
+  const shownBanner = autoBanner ? { cards: active }
+    : banner ? { src: banner.preview }
+      : profile?.banner ? { src: bannerUrl(identity.pubkey, profile.banner) }
+        : profile?.custom_cover ? { cover: profile.cover } : { cards: active };
+  const custom = !autoBanner && (banner || profile?.banner || profile?.custom_cover);
+  const pickedNft = autoBanner ? null : banner ? banner.nft : profile?.banner ? profile.banner_nft : profile?.custom_cover ? profile.cover : null;
   // Nostr collections can pull their Nostr name and picture again.
   const importNostr = async () => {
     setImporting(true); setPictureError('');
@@ -298,41 +335,55 @@ export function EditCollectionDialog({ open, close, profile, identity, onSaved }
       const base = `/api/profiles/${identity.pubkey}`;
       if (picture) updated = await (await signedRequest(identity.signer, `${base}/avatar`, picture.bytes, 'image/jpeg', '', await uploadHeaders())).json();
       else if (removePicture && profile?.avatar) updated = await (await signedRequest(identity.signer, `${base}/avatar/remove`)).json();
-      updated = await socialPost(identity, '/settings', { name: name.trim(), cover });
+      if (banner) await signedRequest(identity.signer, `${base}/banner${banner.nft ? `?nft=${banner.nft}` : ''}`, banner.bytes, 'image/jpeg', '', await uploadHeaders());
+      else if (autoBanner && profile?.banner) await signedRequest(identity.signer, `${base}/banner/remove`);
+      updated = await socialPost(identity, '/settings', { name: name.trim(), cover: autoBanner ? '' : cover });
       setAvatarVersion(identity.pubkey, updated.avatar);
       onSaved(updated); toast.success('Profile updated.'); close();
     } catch (e) { toast.error(e.message); } finally { setSaving(false); }
   };
-  return <Modal open={open} close={() => { if (!saving) close(); }} title="Edit profile" description="Your name, picture and cover.">
-    <form className="stack" onSubmit={save}>
-      {profile?.nostr && <Button type="button" variant="secondary" size="sm" className="nostr-import" onClick={importNostr} disabled={saving || importing}
-        icon={importing ? <Spinner size={14} /> : <ArrowDownToLine size={14} />}>Import name and picture from Nostr</Button>}
-      <div className="field"><span>Picture</span>
-        <div className="avatar-edit">
-          <span className="avatar-preview">
-            {picture ? <img src={picture.preview} alt="" /> : hasPicture ? <img src={`/api/avatars/${identity.pubkey}.jpg?v=${profile.avatar}`} alt="" />
-              : <Identicon pubkey={identity.pubkey} size={72} />}
-          </span>
+  const avatar = <PreviewAvatar pubkey={identity.pubkey} picture={picture?.preview} removed={removePicture} />;
+  return <Modal open={open} close={() => { if (!saving) close(); }} size="profile"
+    title={crop ? 'Crop banner' : 'Edit profile'} description={crop ? 'Position the picture in the banner. Wide pictures fit best.' : 'Your name, picture and banner.'}>
+    {crop ? <BannerCropper source={crop} avatar={avatar} name={name.trim()} device={device} setDevice={setDevice} onCancel={() => setCrop(null)} onApply={applied} />
+      : <form className="stack" onSubmit={save}>
+        <HeaderPreview device={device} ratio={shownBanner.src ? 3 : undefined}
+          banner={<ProfileBanner pubkey={identity.pubkey} {...shownBanner} />} avatar={avatar} name={name.trim()} />
+        {profile?.nostr && <Button type="button" variant="secondary" size="sm" className="nostr-import" onClick={importNostr} disabled={saving || importing}
+          icon={importing ? <Spinner size={14} /> : <ArrowDownToLine size={14} />}>Import name and picture from Nostr</Button>}
+        <div className="field"><span>Picture</span>
           <div className="avatar-actions">
             <input ref={fileRef} type="file" accept="image/*" hidden onChange={(e) => { choose(e.target.files?.[0]); e.target.value = ''; }} />
             <Button type="button" variant="secondary" size="sm" onClick={() => fileRef.current?.click()} disabled={saving}>{hasPicture ? 'Change picture' : 'Upload picture'}</Button>
             {hasPicture && <Button type="button" variant="ghost" size="sm" onClick={() => { setPicture(null); setRemovePicture(true); }} disabled={saving}>Remove</Button>}
             <span className="hint">JPG, PNG or WebP, up to 5 MB.</span>
           </div>
+          {pictureError && <span className="field-error">{pictureError}</span>}
         </div>
-        {pictureError && <span className="field-error">{pictureError}</span>}
-      </div>
-      <label className="field"><span>Name</span><input maxLength={40} value={name} onChange={(e) => setName(e.target.value)} required /></label>
-      <div className="field"><span>Cover</span>
-        <div className="cover-picker">
-          <button type="button" className={`cover-option cover-default ${cover === '' ? 'is-picked' : ''}`} onClick={() => setCover('')}><span>Auto</span></button>
-          {active.map((c) => <motion.button type="button" key={c.id} whileTap={{ scale: .92 }} className={`cover-option ${cover === c.h ? 'is-picked' : ''}`} onClick={() => setCover(c.h)} title={c.title}>
-            <img src={imageUrl(c.h)} alt={c.title} />
-          </motion.button>)}
+        <div className="field"><span>Banner</span>
+          <div className="avatar-actions">
+            <input ref={bannerFileRef} type="file" accept="image/*" hidden onChange={(e) => { cropFile(e.target.files?.[0]); e.target.value = ''; }} />
+            <Button type="button" variant="secondary" size="sm" onClick={() => bannerFileRef.current?.click()} disabled={saving || !!loadingBanner}
+              icon={loadingBanner === 'file' ? <Spinner size={14} /> : <Upload size={14} />}>Upload banner</Button>
+            <Button type="button" variant={picking ? 'primary' : 'secondary'} size="sm" onClick={() => setPicking((v) => !v)} disabled={saving || !active.length}
+              aria-expanded={picking} icon={<ImageIcon size={14} />}>Use an NFT</Button>
+            {custom && <Button type="button" variant="ghost" size="sm" onClick={() => { setBanner(null); setAutoBanner(true); setCover(''); }} disabled={saving}>Use auto</Button>}
+            <span className="hint">{active.length ? 'Upload a wide picture (1500 × 500 fits exactly) or crop one of your NFTs. Auto shows your latest NFTs.'
+              : 'Upload a wide picture (1500 × 500 fits exactly). Auto shows your latest NFTs.'}</span>
+          </div>
+          <AnimatePresence initial={false}>
+            {picking && <motion.div className="cover-picker" initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }} exit={{ opacity: 0, height: 0 }}>
+              {active.map((c) => <motion.button type="button" key={c.id} whileTap={{ scale: .92 }} className={`cover-option ${pickedNft === c.h ? 'is-picked' : ''}`}
+                onClick={() => cropNft(c)} disabled={!!loadingBanner} title={c.title} aria-label={`Crop ${c.title || 'this NFT'} as your banner`}>
+                <img src={imageUrl(c.h)} alt="" />
+                {loadingBanner === c.h && <span className="cover-loading"><Spinner size={16} /></span>}
+              </motion.button>)}
+            </motion.div>}
+          </AnimatePresence>
+          {bannerError && <span className="field-error">{bannerError}</span>}
         </div>
-        <span className="hint">Auto shows your latest NFTs as a mosaic.</span>
-      </div>
-      <Button variant="primary" size="lg" className="full" type="submit" disabled={saving || !name.trim()} icon={saving ? <Spinner /> : null}>Save changes</Button>
-    </form>
+        <label className="field"><span>Name</span><input maxLength={40} value={name} onChange={(e) => setName(e.target.value)} required /></label>
+        <Button variant="primary" size="lg" className="full" type="submit" disabled={saving || !name.trim()} icon={saving ? <Spinner /> : null}>Save changes</Button>
+      </form>}
   </Modal>;
 }
