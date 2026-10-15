@@ -82,7 +82,7 @@ class Social:
         return dict(row)
 
     async def _covers(self, conn: Connection, pubkeys: List[str]) -> Dict[str, dict]:
-        """Cover hash and up to four recent previews for each profile."""
+        """Cover hash, banner and up to four recent previews for each profile."""
         result: Dict[str, dict] = {
             pk: {"cover": None, "previews": []} for pk in pubkeys
         }
@@ -101,13 +101,27 @@ class Social:
             f"SELECT pubkey, h FROM portfolio_covers WHERE pubkey IN ({clause})", params
         )
         custom = {row["pubkey"]: row["h"] for row in chosen}
+        banners = {
+            row["pubkey"]: row
+            for row in await conn.fetchall(
+                f"SELECT pubkey, h, updated FROM portfolio_banners WHERE pubkey IN ({clause})",
+                params,
+            )
+        }
         for pk in pubkeys:
             hs = held[pk]
-            # A custom cover only applies while the collection still holds it.
+            # A custom cover only applies while the collection still holds it,
+            # and so does a banner cut from an NFT. An uploaded banner (no
+            # NFT) is the collection's cover on Explore.
             cover = custom.get(pk) if custom.get(pk) in hs else None
+            banner = banners.get(pk)
+            if banner and banner["h"] is not None and banner["h"] not in hs:
+                banner = None
             result[pk] = {
                 "cover": cover or (hs[0] if hs else None),
                 "custom_cover": cover is not None,
+                "banner": banner["updated"] if banner else None,
+                "banner_nft": banner["h"] if banner else None,
                 "previews": hs[:4],
             }
         return result

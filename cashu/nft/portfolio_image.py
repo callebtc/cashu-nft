@@ -292,16 +292,29 @@ def flatten(
     return flat
 
 
-# --- Profile pictures ----------------------------------------------------------
+# --- Profile pictures and banners ---------------------------------------------
 
 AVATAR_SIZE = 256
 AVATAR_FORMATS = {"JPEG", "PNG", "WEBP", "GIF"}
+# Banners are 3:1, the size Twitter/X uses, so a header made there fits as is.
+BANNER_SIZE = (1500, 500)
 
 
 def avatar_jpg(data: bytes, size: int = AVATAR_SIZE) -> bytes:
     """Re-encode an uploaded profile picture: decode it safely, apply the
     orientation flag, crop the centre square, scale it to ``size`` and save a
     fresh JPG. Nothing from the original file (metadata included) survives."""
+    return _fitted_jpg(data, (size, size))
+
+
+def banner_jpg(data: bytes) -> bytes:
+    """Re-encode an uploaded profile banner like :func:`avatar_jpg`, at
+    ``BANNER_SIZE``. The browser sends the crop the owner chose, already 3:1;
+    anything else is cropped around its centre."""
+    return _fitted_jpg(data, BANNER_SIZE)
+
+
+def _fitted_jpg(data: bytes, size: Tuple[int, int]) -> bytes:
     try:
         with warnings.catch_warnings():
             warnings.simplefilter("error", Image.DecompressionBombWarning)
@@ -312,9 +325,9 @@ def avatar_jpg(data: bytes, size: int = AVATAR_SIZE) -> bytes:
                     raise ValueError("Use a picture with at most 25 million pixels.")
                 image.seek(0)
                 flat = flatten(ImageOps.exif_transpose(image))
-                square = ImageOps.fit(flat, (size, size), Image.Resampling.LANCZOS)
+                fitted = ImageOps.fit(flat, size, Image.Resampling.LANCZOS)
                 out = io.BytesIO()
-                square.save(out, "JPEG", quality=86, optimize=True, progressive=True)
+                fitted.save(out, "JPEG", quality=86, optimize=True, progressive=True)
                 return out.getvalue()
     except DECODE_ERRORS:
         raise ValueError("This picture is damaged or too large to decode safely.")

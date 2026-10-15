@@ -1,5 +1,6 @@
 """Tests for the portfolio social layer (cashu/nft/portfolio_social.py)."""
 
+import io
 import json
 import secrets
 import time
@@ -8,6 +9,7 @@ from typing import Dict, Iterator, List, Tuple
 import pytest
 from coincurve import PrivateKey
 from fastapi.testclient import TestClient
+from PIL import Image
 
 from cashu.nft.portfolio import create_portfolio_app
 from tests.test_nft_portfolio import Profile, exported, make_jpg, minted_card
@@ -284,6 +286,61 @@ def test_cover_selection_reset_and_fallback(client, clock):
     # A sent card cannot be chosen again.
     assert settings(alice, cover=first["h"]).status_code == 400
     assert bob.get()["previews"][0] == first["h"]
+
+
+def test_banner_upload_nft_source_and_fallback(client, clock):
+    alice, bob = people(client, "Alice", "Bob")
+    assert alice.get()["banner"] is None
+    # Any picture is re-encoded to a 1500x500 JPG, cropped around its centre.
+    tall = io.BytesIO()
+    Image.new("RGB", (900, 1200), (200, 40, 40)).save(tall, "PNG")
+    resp = alice.post(f"{alice.base}/banner", tall.getvalue())
+    assert resp.status_code == 200, resp.text
+    version = resp.json()["banner"]
+    assert version and resp.json()["banner_nft"] is None
+    # An uploaded banner is the collection's cover on Explore.
+    listed = client.get("/api/explore/collections?sort=new").json()["items"]
+    mine = next(i for i in listed if i["pubkey"] == alice.pubkey)
+    assert mine["banner"] == version and mine["banner_nft"] is None
+    stored = client.get(f"/api/banners/{alice.pubkey}.jpg")
+    assert stored.status_code == 200 and stored.headers["content-type"] == "image/jpeg"
+    with Image.open(io.BytesIO(stored.content)) as image:
+        assert image.size == (1500, 500) and not image.getexif()
+    assert alice.post(f"{alice.base}/banner", b"not an image").status_code == 400
+    assert (
+        alice.post(f"{alice.base}/banner", b"\0" * (5 * 1024 * 1024 + 1)).status_code
+        == 413
+    )
+    # Only the owner can set it.
+    assert (
+        client.post(f"{alice.base}/banner", content=tall.getvalue()).status_code >= 400
+    )
+
+    # A banner cut from an NFT names it, and must be one of the owner's.
+    first = minted_card(alice, make_jpg(color=(10, 10, 10)))
+    bobs = minted_card(bob, make_jpg(color=(30, 30, 30)))
+    crop = io.BytesIO()
+    Image.new("RGB", (1500, 500), (10, 10, 10)).save(crop, "JPEG")
+    assert (
+        alice.post(f"{alice.base}/banner?nft={bobs['h']}", crop.getvalue()).status_code
+        == 400
+    )
+    assert (
+        alice.post(f"{alice.base}/banner?nft=XYZ", crop.getvalue()).status_code == 422
+    )
+    clock.tick()
+    resp = alice.post(f"{alice.base}/banner?nft={first['h']}", crop.getvalue())
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["banner_nft"] == first["h"] and resp.json()["banner"] > version
+
+    # Once that NFT leaves the collection, the banner stops showing.
+    clock.tick()
+    send(alice, bob, first)
+    assert alice.get()["banner"] is None
+
+    assert alice.post(f"{alice.base}/banner", tall.getvalue()).status_code == 200
+    assert alice.post(f"{alice.base}/banner/remove").json()["banner"] is None
+    assert client.get(f"/api/banners/{alice.pubkey}.jpg").status_code == 404
 
 
 # --- explore ---------------------------------------------------------------------
