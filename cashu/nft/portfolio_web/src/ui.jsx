@@ -95,9 +95,9 @@ function useAvatarVersion(pubkey) {
   return avatarVersions.get(pubkey) ?? null;
 }
 
-export function Identicon({ pubkey, size = 72 }) {
+export function Identicon({ pubkey, size = 72, plain = false }) {
   const version = useAvatarVersion(pubkey);
-  if (version) return <img className="identicon avatar-img" src={`/api/avatars/${pubkey}.jpg?v=${version}`} width={size} height={size} alt="" loading="lazy" decoding="async" />;
+  if (version && !plain) return <img className="identicon avatar-img" src={`/api/avatars/${pubkey}.jpg?v=${version}`} width={size} height={size} alt="" loading="lazy" decoding="async" />;
   const bytes = pubkey.match(/../g).map((b) => parseInt(b, 16));
   const color = identiconColor(pubkey);
   const cells = [];

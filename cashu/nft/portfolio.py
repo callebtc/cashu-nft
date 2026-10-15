@@ -46,6 +46,7 @@ from .moderation import DEFAULT_THRESHOLD, Classifier, Moderation, NSFWClassifie
 from .nostr_sig import PROFILE_SIG, verify_signature
 from .portfolio_image import (
     avatar_jpg,
+    banner_jpg,
     image_format,
     normalize_image,
     split_transfer,
@@ -98,6 +99,7 @@ AUTH_DOMAIN = "Cashu_NFT_Portfolio_Auth_v1"
 CLAIM_DOMAIN = "Cashu_NFT_Portfolio_Claim_v1\n"
 SHOW_DOMAIN = "Cashu_NFT_Portfolio_Show_v1"
 MAX_AVATAR_BYTES = 5 * 1024 * 1024  # upload limit; stored pictures are 256 px
+MAX_BANNER_BYTES = 5 * 1024 * 1024  # stored banners are 1500x500
 SESSION_TTL = 30 * 86400  # longest a signing extension's session key may last
 MAX_SESSIONS = 20  # live session keys per profile
 WEB_DIR = Path(__file__).parent / "portfolio_web" / "dist"
@@ -225,6 +227,10 @@ class Portfolio:
                     pubkey TEXT PRIMARY KEY, name TEXT NOT NULL, created INTEGER NOT NULL)""",
                 """CREATE TABLE IF NOT EXISTS portfolio_avatars (
                     pubkey TEXT PRIMARY KEY, jpg BLOB NOT NULL, updated INTEGER NOT NULL)""",
+                # h: the NFT the banner was cropped from, NULL for an upload.
+                """CREATE TABLE IF NOT EXISTS portfolio_banners (
+                    pubkey TEXT PRIMARY KEY, jpg BLOB NOT NULL, h TEXT,
+                    updated INTEGER NOT NULL)""",
                 """CREATE TABLE IF NOT EXISTS portfolio_images (
                     h TEXT PRIMARY KEY, jpg BLOB NOT NULL)""",
                 """CREATE TABLE IF NOT EXISTS portfolio_cards (
@@ -1206,6 +1212,60 @@ def create_portfolio_app(
             "DELETE FROM portfolio_avatars WHERE pubkey=:p", {"p": pubkey}
         )
         return await get_profile(pubkey)
+
+    @app.post("/api/profiles/{pubkey}/banner")
+    async def upload_banner(
+        pubkey: str,
+        request: Request,
+        nft: str = Query(default="", pattern=r"^([0-9a-f]{64})?$"),
+    ):
+        raw = await read_body(request, MAX_BANNER_BYTES)
+        await authorize(request, pubkey, raw)
+        if turnstile:
+            await turnstile.verify(request)
+        if nft:
+            held = await portfolio.db.fetchone(
+                "SELECT id FROM portfolio_cards WHERE pubkey=:p AND h=:h AND status!='sent'",
+                {"p": pubkey, "h": nft},
+            )
+            if held is None:
+                raise HTTPException(
+                    400, "Pick a banner from the NFTs in your collection."
+                )
+        try:
+            jpg = await run_in_threadpool(banner_jpg, raw)
+        except ValueError as error:
+            raise HTTPException(400, str(error))
+        await portfolio.moderation.check(pubkey, jpg)
+        await portfolio.db.execute(
+            """INSERT INTO portfolio_banners(pubkey,jpg,h,updated) VALUES(:p,:j,:h,:t)
+            ON CONFLICT(pubkey) DO UPDATE SET jpg=:j, h=:h, updated=:t""",
+            {"p": pubkey, "j": jpg, "h": nft or None, "t": int(time.time())},
+        )
+        return await get_profile(pubkey)
+
+    @app.post("/api/profiles/{pubkey}/banner/remove")
+    async def remove_banner(pubkey: str, request: Request):
+        await authorize(request, pubkey, await read_body(request, 0))
+        await portfolio.db.execute(
+            "DELETE FROM portfolio_banners WHERE pubkey=:p", {"p": pubkey}
+        )
+        return await get_profile(pubkey)
+
+    @app.get("/api/banners/{pubkey}.jpg")
+    async def banner(pubkey: str):
+        validate_pubkey(pubkey)
+        row = await portfolio.db.fetchone(
+            "SELECT jpg FROM portfolio_banners WHERE pubkey=:p", {"p": pubkey}
+        )
+        if row is None:
+            raise HTTPException(404, "No banner.")
+        # URLs carry ?v=<updated>, so a new banner is a new URL.
+        return Response(
+            bytes(row["jpg"]),
+            media_type="image/jpeg",
+            headers={"Cache-Control": "public, max-age=31536000, immutable"},
+        )
 
     @app.get("/api/avatars")
     async def avatar_versions(pubkeys: str = Query(default="", max_length=6600)):

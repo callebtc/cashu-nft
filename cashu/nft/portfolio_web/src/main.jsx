@@ -14,7 +14,7 @@ import { newPrivateKey, parseShowing, profileKey, validateKeyset } from './crypt
 import { checked, download, getJSON, signedRequest } from './api.mjs';
 import { setTurnstileSitekey } from './turnstile.mjs';
 import { BackButton, Button, CheckRow, SkeletonCards, CopyChip, DrawnCheck, HoldButton, Identicon, Modal, Notice, PreviewArt, StorageNotice, Spinner, StatusBadge,
-  Tilt, copyText, date, identiconColor, panel, short, useTint, verdict } from './ui.jsx';
+  Tilt, copyText, date, panel, short, useTint, verdict } from './ui.jsx';
 import HowItWorks from './HowItWorks.jsx';
 import ClaimPage from './claim.jsx';
 import { linkUrl, newLinkId, sealLink } from './link.mjs';
@@ -25,6 +25,7 @@ import { ACTIVE, KEYRING, forget, identityFor, initialIdentity, keyCollections, 
 import { deferred, isDeferred } from './signer.ts';
 import { npubDecode, npubEncode, publicKeyIn, shortNpub } from './npub.mjs';
 import { useNostrLogin } from './login.jsx';
+import { ProfileBanner, bannerUrl } from './banner.jsx';
 import { StartDialog } from './start.jsx';
 import { ACCEPT, LABELS, fileFormat, formatOf, imageUrl, withoutExtension } from './formats.mjs';
 import { HOME, MOVED_FROM, MoveOffer, MoveReceive, MoveStranded, movePlan, redirectHome } from './move.jsx';
@@ -941,11 +942,8 @@ function App() {
 
       : <main className="page profile">
         <section className="profile-card">
-          {profile?.custom_cover
-            ? <div className="profile-banner banner-1 is-cover" style={{ '--tint': identiconColor(pubkey) }}><img src={imageUrl(profile.cover)} alt="" /></div>
-            : <div className={`profile-banner banner-${active.length >= 6 ? 6 : active.length >= 3 ? 3 : active.length ? 1 : 0}`} style={{ '--tint': identiconColor(pubkey) }}>
-              {active.slice(0, active.length >= 6 ? 6 : active.length >= 3 ? 3 : 1).map((c) => <img key={c.id} src={imageUrl(c.h)} alt="" />)}
-            </div>}
+          <ProfileBanner pubkey={pubkey} src={profile?.banner ? bannerUrl(pubkey, profile.banner) : null}
+            cover={profile?.custom_cover ? profile.cover : null} cards={active} />
           <div className="profile-main">
             <div className="profile-avatar"><Identicon pubkey={pubkey} size={88} /></div>
             <div className="profile-id">
