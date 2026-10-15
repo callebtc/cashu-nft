@@ -288,6 +288,39 @@ const phases = {
     return { afterSend, received, bBalance };
   },
 
+  /** Mint an NFT and fund the ecash wallet, then close the tab: no dispose,
+   *  no sync, the process just ends once its own pushes are done. */
+  async close_tab({ secret, amount }) {
+    const pubkey = await profile(secret, 'Closer');
+    const { manager, wallet: nft } = await nftWallet(secret);
+    const minted = await nft.mint(jpg, 'Kept');
+    await manager.dispose();
+    const wallet = await MoneyWallet.open(secret, { devMints: [MINT] });
+    await wallet.addMint(MINT);
+    await fund(wallet, amount);
+    const balance = await balanceOf(wallet);
+    await wallet.repos.flushed();
+    const backup = await wallet.api.get_backup();
+    return { pubkey, minted, balance, revision: wallet.repos.revision, backupRevision: backup.revision };
+  },
+  /** A new browser with only the private key: collection, NFTs and ecash. */
+  async new_browser({ secret }) {
+    const pubkey = profileKey(secret);
+    const collection = await get(`/api/profiles/${pubkey}`);
+    const { manager, wallet: nft } = await nftWallet(secret);
+    const recovered = await nft.recover();
+    const card = collection.cards[0];
+    const transfer = await nft.sendToken(card); // only works with the restored credential
+    await manager.dispose();
+    const wallet = await MoneyWallet.open(secret, { devMints: [MINT] });
+    const readOnly = wallet.readOnly, before = await balanceOf(wallet);
+    const tookOver = await wallet.takeOver();
+    const token = await wallet.send(MINT, 5);
+    const after = await balanceOf(wallet);
+    await wallet.dispose();
+    return { name: collection.name, cards: collection.cards, recovered, transfer: !!transfer.nullifier, readOnly, before, tookOver, token: token.slice(0, 5), after };
+  },
+
   /** A browser that stays open (or crashed) keeps the single-writer lease. */
   async hold({ secret }) {
     await MoneyWallet.open(secret, { devMints: [MINT], takeover: true });

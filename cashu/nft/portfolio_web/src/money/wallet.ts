@@ -78,9 +78,31 @@ export class MoneyWallet {
 
   private startLifecycle() {
     if (typeof document !== 'undefined') {
-      const onChange = () => { void (document.hidden ? this.manager.pauseSubscriptions() : this.resume()); };
+      // Changes are pushed as they're saved (store.ts); hiding or closing the
+      // tab pushes anything a failed push left behind.
+      const onChange = () => {
+        if (!document.hidden) { void this.resume(); return; }
+        void this.manager.pauseSubscriptions();
+        void this.sync().catch(() => {});
+      };
+      const onPageHide = () => { void this.sync().catch(() => {}); };
+      // A push needs two round trips, more than a closing tab gets. While
+      // one is due, the browser asks before leaving and the push finishes
+      // meanwhile; otherwise a new browser would restore an older wallet.
+      const onBeforeUnload = (event: BeforeUnloadEvent) => {
+        if (!this.repos.unsynced) return;
+        void this.repos.flushed();
+        event.preventDefault();
+        event.returnValue = '';
+      };
       document.addEventListener('visibilitychange', onChange);
-      this.visibility = () => document.removeEventListener('visibilitychange', onChange);
+      addEventListener('pagehide', onPageHide);
+      addEventListener('beforeunload', onBeforeUnload);
+      this.visibility = () => {
+        document.removeEventListener('visibilitychange', onChange);
+        removeEventListener('pagehide', onPageHide);
+        removeEventListener('beforeunload', onBeforeUnload);
+      };
     }
     // Push the encrypted snapshot and renew the lease while open.
     this.syncing = setInterval(() => { void this.sync().catch(() => {}); }, 30_000);

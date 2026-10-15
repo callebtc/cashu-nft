@@ -12,8 +12,9 @@ export async function getJSON(path) { return (await checked(await fetch(path, { 
 // `signer` is a Signer (signer.ts) or a raw private key. `origin` is empty in
 // the browser (same-origin); Node tests pass the server URL.
 /** @param {string | import('./signer.ts').Signer} signer @param {string} path @param {string | Uint8Array} [body]
- *  @param {string} [contentType] @param {string} [origin] @param {Record<string, string>} [headers] */
-export async function signedRequest(signer, path, body = new Uint8Array(), contentType = 'application/octet-stream', origin = '', headers = {}) {
+ *  @param {string} [contentType] @param {string} [origin] @param {Record<string, string>} [headers]
+ *  @param {{ keepalive?: boolean }} [options] */
+export async function signedRequest(signer, path, body = new Uint8Array(), contentType = 'application/octet-stream', origin = '', headers = {}, options = {}) {
   const bytes = typeof body === 'string' ? new TextEncoder().encode(body) : body;
   // Sign the path exactly as fetch sends it: the URL parser escapes some
   // characters encodeURIComponent keeps (' in a query becomes %27), and the
@@ -30,7 +31,7 @@ export async function signedRequest(signer, path, body = new Uint8Array(), conte
   if (challenge.message !== expected) throw new Error('Unexpected signing challenge.');
   const { signature, session } = await signer.auth(expected);
   return checked(await fetch(origin + path, {
-    method: 'POST', body: bytes,
+    method: 'POST', body: bytes, keepalive: !!options.keepalive,
     headers: { ...headers, 'Content-Type': contentType, 'X-Portfolio-Challenge': challenge.nonce,
       'X-Portfolio-Signature': signature, ...(session ? { 'X-Portfolio-Session': session } : {}) },
   }));

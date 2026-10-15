@@ -30,6 +30,7 @@ export interface InboxEvent { id: number; kind: string; offer_id: string | null;
 export interface RecoveryRecord { id: string; kind: string; envelope: Sealed; updated?: number; }
 
 const json = (value: unknown) => new TextEncoder().encode(JSON.stringify(value));
+const KEEPALIVE_BYTES = 60_000;
 
 export class MarketApi {
   readonly pubkey: string;
@@ -39,9 +40,9 @@ export class MarketApi {
   private async read<T>(path: string): Promise<T> {
     return (await checked(await fetch(this.origin + path, { cache: 'no-store' }))).json();
   }
-  private async post<T>(path: string, body?: unknown): Promise<T> {
+  private async post<T>(path: string, body?: unknown, options?: { keepalive?: boolean }): Promise<T> {
     const bytes = body === undefined ? new Uint8Array() : json(body);
-    const response = await signedRequest(this.signer, `/api/profiles/${this.pubkey}${path}`, bytes, 'application/json', this.origin);
+    const response = await signedRequest(this.signer, `/api/profiles/${this.pubkey}${path}`, bytes, 'application/json', this.origin, {}, options);
     return response.json();
   }
 
@@ -83,9 +84,12 @@ export class MarketApi {
 
   // RemoteBackup: the encrypted ordinary-wallet snapshot and its single-writer lease.
   lease(device: string, takeover = false, release = false) { return this.post<{ granted: boolean; holder: string; until: number }>('/money/lease', { device, takeover, release }); }
-  get_backup() { return this.post<{ revision: number; envelope: Sealed | null }>('/money/backup/get'); }
+  get_backup() { return this.post<{ revision: number; envelope: Sealed | null; device?: string }>('/money/backup/get'); }
   put(device: string, base_revision: number, revision: number, envelope: Sealed) {
-    return this.post<{ revision: number }>('/money/backup/put', { device, base_revision, revision, envelope });
+    const body = { device, base_revision, revision, envelope };
+    // keepalive finishes an upload the closing tab already started; browsers
+    // cap such requests at 64 KB, so a larger wallet uploads normally.
+    return this.post<{ revision: number }>('/money/backup/put', body, { keepalive: json(body).length < KEEPALIVE_BYTES });
   }
 }
 
