@@ -16,6 +16,17 @@ export interface Listing {
   id: string; card_id: string; seller: string; seller_name: string | null; title: string | null; h: string; nullifier: string;
   price: number; revision: number; claim_pubkey: string; state: string; created: number; updated: number;
 }
+export type ListingSort = 'new' | 'old' | 'price_asc' | 'price_desc' | 'bids' | 'top_bid';
+/** Browse filters. `sellers` is a comma-separated list of up to 20 pubkeys; `since` is in seconds. */
+export interface ListingParams {
+  sort?: ListingSort; q?: string; seller?: string; sellers?: string; min_price?: number; max_price?: number;
+  bids?: '' | 'some' | 'none'; since?: number; available?: boolean; limit?: number; offset?: number;
+}
+export interface ListingPage {
+  items: (Listing & { bids: { count: number; bidders: number; top: number | null } })[]; more: boolean; total: number;
+  /** Each facet ignores its own filter. Price buckets split [min, max] evenly on a log scale. */
+  facets: { price: { min: number | null; max: number | null; buckets: number[] }; sellers: { pubkey: string; name: string | null; count: number }[] };
+}
 export interface Proof { amount: number; id: string; secret: string; C: string; dleq?: { e: string; s: string; r: string } | null; }
 export interface Job { kind: 'claim' | 'refund'; state: string; outcome: string | null; attempts: number; last_error: string | null; not_before: number; }
 export interface OfferView {
@@ -49,9 +60,9 @@ export class MarketApi {
   config() { return this.read<MarketConfig>('/api/market/config'); }
   checkMint(url: string) { return this.read<Eligibility>(`/api/market/mints/check?url=${encodeURIComponent(url)}`); }
   quote(mint: string, price: number) { return this.read<Quote>(`/api/market/quote?mint=${encodeURIComponent(mint)}&price=${price}`); }
-  listings(params: { sort?: string; q?: string; seller?: string; limit?: number; offset?: number } = {}) {
+  listings(params: ListingParams = {}) {
     const query = new URLSearchParams(Object.entries(params).filter(([, v]) => v !== undefined && v !== '').map(([k, v]) => [k, String(v)]));
-    return this.read<{ items: Listing[]; more: boolean }>(`/api/market/listings?${query}`);
+    return this.read<ListingPage>(`/api/market/listings?${query}`);
   }
   listing(id: string) { return this.read<Listing>(`/api/market/listings/${id}`); }
   listingForCard(cardId: string) { return this.read<{ listing: Listing | null }>(`/api/market/cards/${cardId}/listing`); }

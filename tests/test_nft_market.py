@@ -862,6 +862,75 @@ async def test_bids_are_public_highest_first_and_in_activity(env, cash):
 
 
 @pytest.mark.asyncio
+async def test_browse_filters_sorts_and_facets(env, cash):
+    ana, ben, cy = await env.actor("Ana"), await env.actor("Ben"), await env.actor("Cy")
+    env.shift_clock(-3 * 86400)
+    await list_nft(env, await give_nft(env, ana, title="Dawn"), 3)
+    env.shift_clock(-600)
+    noon = await list_nft(env, await give_nft(env, ana, title="Noon"), 40)
+    env.shift_clock(0)
+    dusk = await list_nft(env, await give_nft(env, ben, title="Dusk"), 900)
+    await submit(cy, await make_offer(env, cy, cash, noon, price=50))
+
+    async def browse(query: str = "") -> Dict[str, Any]:
+        r = await env.http.get(f"/api/market/listings?{query}")
+        assert r.status_code == 200, r.text
+        return r.json()
+
+    def titles(page: Dict[str, Any]) -> List[str]:
+        return [i["title"] for i in page["items"]]
+
+    def sellers(page: Dict[str, Any]) -> Dict[str, int]:
+        return {s["name"]: s["count"] for s in page["facets"]["sellers"]}
+
+    everything = await browse()
+    assert titles(everything) == ["Dusk", "Noon", "Dawn"] and everything["total"] == 3
+    price = everything["facets"]["price"]
+    assert (price["min"], price["max"]) == (3, 900)
+    assert len(price["buckets"]) == 28 and sum(price["buckets"]) == 3
+    assert price["buckets"][0] == price["buckets"][-1] == 1
+    assert sellers(everything) == {"Ana": 2, "Ben": 1}
+
+    # Sorts.
+    assert titles(await browse("sort=old")) == ["Dawn", "Noon", "Dusk"]
+    assert titles(await browse("sort=price_asc")) == ["Dawn", "Noon", "Dusk"]
+    assert titles(await browse("sort=price_desc")) == ["Dusk", "Noon", "Dawn"]
+    assert titles(await browse("sort=bids"))[0] == "Noon"
+    assert titles(await browse("sort=top_bid")) == ["Noon", "Dusk", "Dawn"]
+
+    # A facet ignores its own filter, so the other choices stay visible.
+    ranged = await browse("min_price=10&max_price=100")
+    assert titles(ranged) == ["Noon"] and ranged["total"] == 1
+    assert sum(ranged["facets"]["price"]["buckets"]) == 3
+    assert sellers(ranged) == {"Ana": 1}
+    by_ben = await browse(f"sellers={ben.pubkey}")
+    assert titles(by_ben) == ["Dusk"] and sellers(by_ben) == {"Ana": 2, "Ben": 1}
+    both = await browse(f"sellers={ben.pubkey},{ana.pubkey}&sort=price_asc")
+    assert titles(both) == ["Dawn", "Noon", "Dusk"]
+
+    assert titles(await browse("bids=some")) == ["Noon"]
+    assert titles(await browse("bids=none")) == ["Dusk", "Dawn"]
+    assert titles(await browse("since=86400")) == ["Dusk", "Noon"]
+    assert titles(await browse("q=ben")) == ["Dusk"]
+
+    # Sales in progress are listed unless only buyable NFTs are asked for.
+    async with env.db.get_connection() as conn:
+        await conn.execute(
+            "UPDATE market_listings SET state='reserved' WHERE id=:id",
+            {"id": dusk["id"]},
+        )
+    assert titles(await browse()) == ["Dusk", "Noon", "Dawn"]
+    available = await browse("available=1")
+    assert titles(available) == ["Noon", "Dawn"] and available["total"] == 2
+
+    paged = await browse("sort=price_asc&limit=1&offset=1")
+    assert titles(paged) == ["Noon"] and paged["more"] and paged["total"] == 3
+
+    for bad in ("sellers=abc", "bids=maybe", "min_price=-1", "since=1", "sort=hot"):
+        assert (await env.http.get(f"/api/market/listings?{bad}")).status_code == 422
+
+
+@pytest.mark.asyncio
 async def test_listed_nft_cannot_be_deleted_until_unlisted(env):
     seller = await give_nft(env, await env.actor("Ana"))
     listing = await list_nft(env, seller, 10)

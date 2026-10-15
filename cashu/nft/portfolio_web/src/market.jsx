@@ -3,13 +3,15 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
 import { toast } from 'sonner';
-import { ChevronRight, Clock, Coins, Gavel, Search, Store, Tag, Wallet, Zap } from 'lucide-react';
+import { ChevronRight, Clock, Coins, Gavel, Search, SlidersHorizontal, Store, Tag, Wallet, Zap } from 'lucide-react';
 import { getJSON } from './api.mjs';
 import { BackButton, Button, CheckRow, HoldButton, SkeletonCards, SkeletonDetail, SkeletonRows, Identicon, Modal, Notice, Spinner, Tilt, panel, short, useTint } from './ui.jsx';
 import { Segmented, ago, imageUrl } from './social.jsx';
 import { local } from './storage.ts';
+import { ActiveFilters, FilterPanel, SortMenu, listingQuery, useDebouncedValue, useFilters, useWide } from './filters.jsx';
 
 const loadMoney = () => import('./money/wallet.ts');
+const PANEL_KEY = 'cashu-market-filters';
 export const sats = (n) => `${Number(n || 0).toLocaleString()} sat${Number(n) === 1 ? '' : 's'}`;
 const when = (t) => new Date(t * 1000).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
 const LIFETIMES = [[6 * 3600, '6 hours'], [24 * 3600, '24 hours'], [3 * 86400, '3 days'], [7 * 86400, '7 days']];
@@ -129,7 +131,7 @@ function Price({ value, big }) { return <span className={`price ${big ? 'price-l
 
 /* ---------- browse ---------- */
 
-function ListingCard({ item, index, onOpen }) {
+function ListingCard({ item, index, sort, onOpen }) {
   const [tint, onLoad] = useTint(item.h);
   return <motion.div className="card-slot" initial={{ opacity: 0, y: 18 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: Math.min(index, 10) * .035, type: 'spring', stiffness: 260, damping: 26 }}>
     <Tilt>
@@ -138,7 +140,7 @@ function ListingCard({ item, index, onOpen }) {
         <div className="nft-body">
           <span className="nft-meta"><span className="nft-title">{item.title || 'Untitled'}</span><Price value={item.price} /></span>
           <span className="nft-meta"><span className="owner-chip"><Identicon pubkey={item.seller} size={18} /><span className="ellipsis">{item.seller_name || 'Collector'}</span></span>
-            {item.bids?.count > 0 && <span className="bid-chip" title={`Top bid ${sats(item.bids.top)}`}><Gavel size={12} />{item.bids.count} {item.bids.count === 1 ? 'bid' : 'bids'}</span>}</span>
+            {item.bids?.count > 0 && <span className="bid-chip" title={`Top bid ${sats(item.bids.top)}`}><Gavel size={12} />{sort === 'top_bid' ? `Top ${Number(item.bids.top).toLocaleString()}` : `${item.bids.count} ${item.bids.count === 1 ? 'bid' : 'bids'}`}</span>}</span>
         </div>
       </button>
     </Tilt>
@@ -146,28 +148,63 @@ function ListingCard({ item, index, onOpen }) {
 }
 
 export function MarketPage({ navigate }) {
-  const [items, setItems] = useState(null), [more, setMore] = useState(false), [sort, setSort] = useState('new'), [query, setQuery] = useState('');
-  const [q, setQ] = useState('');
-  useEffect(() => { const t = setTimeout(() => setQ(query.trim()), 250); return () => clearTimeout(t); }, [query]);
+  const { filters, set, clear, active } = useFilters();
+  const wide = useWide();
+  const [items, setItems] = useState(null), [more, setMore] = useState(false), [total, setTotal] = useState(null), [facets, setFacets] = useState(null);
+  const [panel, setPanel] = useState(() => local.get(PANEL_KEY) !== '0'), [sheet, setSheet] = useState(false);
+  const query = useDebouncedValue(filters), [loading, setLoading] = useState(false), latest = useRef(0);
+  // Results stay on screen (dimmed) while a new query loads; only the newest response lands.
   const load = useCallback(async (offset = 0) => {
-    const data = await getJSON(`/api/market/listings?sort=${sort}&q=${encodeURIComponent(q)}&limit=24&offset=${offset}`);
-    setItems((prev) => offset ? [...(prev || []), ...data.items] : data.items); setMore(data.more);
-  }, [sort, q]);
-  useEffect(() => { setItems(null); load(0).catch((e) => { toast.error(e.message); setItems([]); }); }, [load]);
+    const ticket = ++latest.current;
+    setLoading(true);
+    try {
+      const data = await getJSON(`/api/market/listings?${listingQuery(query, offset)}`);
+      if (ticket !== latest.current) return;
+      setItems((prev) => offset ? [...(prev || []), ...data.items] : data.items); setMore(data.more);
+      setTotal(data.total ?? null); setFacets(data.facets ?? null);
+    } catch (e) { if (ticket === latest.current) { toast.error(e.message); setItems((prev) => prev || []); } }
+    finally { if (ticket === latest.current) setLoading(false); }
+  }, [query]);
+  useEffect(() => { load(0); }, [load]);
+  const togglePanel = () => {
+    if (!wide) { setSheet(true); return; }
+    setPanel((v) => { local.set(PANEL_KEY, v ? '0' : '1'); return !v; });
+  };
+  const filtered = active > 0 || !!query.q.trim();
   return <main className="page explore">
     <header className="page-head">
       <div><span className="pill"><Store size={14} />Market</span><h1>NFTs for sale</h1></div>
       <p className="muted page-lede">Offers are paid upfront in ecash and held in a time lock. Unaccepted offers refund automatically.</p>
     </header>
-    <div className="toolbar">
-      <label className="search"><Search size={17} /><input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search by title" aria-label="Search listings" /></label>
-      <div className="sorts">{[['new', 'Newest'], ['price_asc', 'Price: low to high'], ['price_desc', 'Price: high to low']].map(([k, l]) =>
-        <button key={k} className={`sort ${sort === k ? 'is-active' : ''}`} onClick={() => setSort(k)}>{l}</button>)}</div>
+    <div className="toolbar market-toolbar">
+      <button className={`filter-toggle ${wide && panel ? 'is-open' : ''}`} onClick={togglePanel} aria-expanded={wide ? panel : sheet}>
+        <SlidersHorizontal size={16} />Filters{active > 0 && <span className="filter-count">{active}</span>}
+      </button>
+      <label className="search"><Search size={17} /><input value={filters.q} onChange={(e) => set({ q: e.target.value })} placeholder="Search by title or seller" aria-label="Search listings" /></label>
+      <SortMenu value={filters.sort} onChange={(sort) => set({ sort })} />
     </div>
-    {!items ? <SkeletonCards count={8} />
-      : !items.length ? <div className="empty"><strong>Nothing listed yet</strong><span className="muted">{q ? 'Try a different search.' : 'Open one of your NFTs and choose List for sale.'}</span></div>
-        : <div className="grid">{items.map((item, i) => <ListingCard key={item.id} item={item} index={i} onOpen={(l) => navigate(`/market/${l.id}`)} />)}</div>}
-    {more && <div className="load-more"><Button variant="secondary" onClick={() => load(items.length)}>Load more</Button></div>}
+    <div className={`browse ${wide && panel ? 'has-panel' : ''}`}>
+      <AnimatePresence initial={false}>{wide && panel && <motion.aside key="panel" className="browse-side" aria-label="Filters"
+        initial={{ opacity: 0, x: -16 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -16 }} transition={{ duration: .2 }}>
+        <FilterPanel filters={filters} set={set} facets={facets} />
+      </motion.aside>}</AnimatePresence>
+      <section className={`browse-results ${loading && items ? 'is-loading' : ''}`} aria-busy={loading}>
+        <ActiveFilters filters={filters} set={set} clear={clear} facets={facets} total={total} />
+        {!items ? <SkeletonCards count={8} />
+          : !items.length ? <div className="empty">{filtered
+            ? <><strong>No matches</strong><span className="muted">Nothing for sale matches these filters.</span>{active > 0 && <Button variant="secondary" onClick={clear}>Clear filters</Button>}</>
+            : <><strong>Nothing listed yet</strong><span className="muted">Open one of your NFTs and choose List for sale.</span></>}</div>
+            : <div className="grid">{items.map((item, i) => <ListingCard key={item.id} item={item} index={i} sort={query.sort} onOpen={(l) => navigate(`/market/${l.id}`)} />)}</div>}
+        {more && <div className="load-more"><Button variant="secondary" disabled={loading} onClick={() => load(items.length)}>Load more</Button></div>}
+      </section>
+    </div>
+    {!wide && <Modal open={sheet} close={() => setSheet(false)} title="Filters" size="sheet">
+      <FilterPanel filters={filters} set={set} facets={facets} />
+      <div className="sheet-actions">
+        <Button variant="ghost" onClick={clear} disabled={!active}>Clear all</Button>
+        <Button variant="primary" onClick={() => setSheet(false)}>{total == null ? 'Show results' : total === 0 ? 'No results' : `Show ${total.toLocaleString()} ${total === 1 ? 'result' : 'results'}`}</Button>
+      </div>
+    </Modal>}
   </main>;
 }
 

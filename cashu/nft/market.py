@@ -25,6 +25,7 @@ import logging
 import math
 import secrets
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Literal, Optional, Tuple
 
@@ -866,27 +867,16 @@ class Market:
         return self._public_listing(row, summary.get(listing_id))
 
     async def listings(
-        self, sort: str, q: str, seller: Optional[str], limit: int, offset: int
+        self, sort: str, f: "ListingFilter", limit: int, offset: int
     ) -> Dict[str, Any]:
-        order = {
-            "new": "l.updated DESC",
-            "price_asc": "l.price ASC, l.updated DESC",
-            "price_desc": "l.price DESC, l.updated DESC",
-        }[sort]
+        """Live listings matching ``f``, with the total and the facets the
+        browse filters show: a price histogram and listings per seller."""
+        now = self.clock()
+        where, params = f.where(now)
         rows = await self.db.fetchall(
-            f"""SELECT l.*, p.name AS seller_name, c.title AS title FROM market_listings l
-            LEFT JOIN portfolio_profiles p ON p.pubkey=l.seller
-            LEFT JOIN portfolio_cards c ON c.id=l.card_id
-            WHERE l.state IN ('active','reserved') AND (:seller='' OR l.seller=:seller)
-            AND (:q='' OR lower(c.title) LIKE :like OR lower(p.name) LIKE :like)
-            ORDER BY {order} LIMIT :limit OFFSET :offset""",
-            {
-                "seller": seller or "",
-                "q": q,
-                "like": f"%{q.lower()}%",
-                "limit": limit + 1,
-                "offset": offset,
-            },
+            f"""SELECT l.*, p.name AS seller_name, c.title AS title {LISTING_FROM}
+            WHERE {where} ORDER BY {LISTING_SORTS[sort]} LIMIT :limit OFFSET :offset""",
+            {**params, "limit": limit + 1, "offset": offset},
         )
         await self._refresh_stale(rows[:limit])
         summaries = await self._bid_summaries([r["id"] for r in rows[:limit]])
@@ -897,7 +887,50 @@ class Market:
             )
             if current and current["state"] in ("active", "reserved"):
                 live.append(self._public_listing(r, summaries.get(r["id"])))
-        return {"items": live, "more": len(rows) > limit}
+        total = await self.db.fetchone(
+            f"SELECT COUNT(*) AS n {LISTING_FROM} WHERE {where}", params
+        )
+        return {
+            "items": live,
+            "more": len(rows) > limit,
+            "total": total["n"] if total else 0,
+            "facets": {
+                "price": await self._price_facet(f, now),
+                "sellers": await self._seller_facet(f, now),
+            },
+        }
+
+    async def _price_facet(self, f: "ListingFilter", now: int) -> Dict[str, Any]:
+        """Log-scale histogram of matching prices, ignoring the price filter.
+        The bounds span every live listing so the slider keeps its scale."""
+        bounds = await self.db.fetchone(
+            "SELECT MIN(price) AS lo, MAX(price) AS hi FROM market_listings WHERE state IN ('active','reserved')"
+        )
+        lo, hi = (bounds["lo"], bounds["hi"]) if bounds else (None, None)
+        if lo is None or hi is None:
+            return {"min": None, "max": None, "buckets": []}
+        where, params = f.where(now, skip="price")
+        rows = await self.db.fetchall(
+            f"SELECT l.price {LISTING_FROM} WHERE {where}", params
+        )
+        buckets = [0] * PRICE_BUCKETS
+        span = math.log(hi) - math.log(lo)
+        for r in rows:
+            at = (math.log(r["price"]) - math.log(lo)) / span if span else 0
+            buckets[min(PRICE_BUCKETS - 1, max(0, int(at * PRICE_BUCKETS)))] += 1
+        return {"min": lo, "max": hi, "buckets": buckets}
+
+    async def _seller_facet(self, f: "ListingFilter", now: int) -> List[Dict[str, Any]]:
+        """Sellers with matching listings, ignoring the seller filter."""
+        where, params = f.where(now, skip="sellers")
+        rows = await self.db.fetchall(
+            f"""SELECT l.seller, p.name, COUNT(*) AS n {LISTING_FROM} WHERE {where}
+            GROUP BY l.seller, p.name ORDER BY n DESC, p.name LIMIT 100""",
+            params,
+        )
+        return [
+            {"pubkey": r["seller"], "name": r["name"], "count": r["n"]} for r in rows
+        ]
 
     async def listing_for_card(self, card_id: str) -> Optional[Dict[str, Any]]:
         row = await self.db.fetchone(
@@ -1991,7 +2024,69 @@ class Executor:
         await self._finish(job, "done", job["kind"], sigs, None)
 
 
-ListingSort = Literal["new", "price_asc", "price_desc"]
+ListingSort = Literal["new", "old", "price_asc", "price_desc", "bids", "top_bid"]
+# Bid columns come from LISTING_FROM's open-bid summary.
+LISTING_SORTS = {
+    "new": "l.updated DESC, l.id",
+    "old": "l.updated ASC, l.id",
+    "price_asc": "l.price ASC, l.updated DESC, l.id",
+    "price_desc": "l.price DESC, l.updated DESC, l.id",
+    "bids": "COALESCE(b.n, 0) DESC, COALESCE(b.top, 0) DESC, l.updated DESC, l.id",
+    "top_bid": "COALESCE(b.top, 0) DESC, l.price DESC, l.updated DESC, l.id",
+}
+LISTING_FROM = """FROM market_listings l
+    LEFT JOIN portfolio_profiles p ON p.pubkey=l.seller
+    LEFT JOIN portfolio_cards c ON c.id=l.card_id
+    LEFT JOIN (SELECT listing_id, COUNT(*) AS n, MAX(price) AS top FROM market_offers
+        WHERE disposition='funded' AND accept_deadline>:now GROUP BY listing_id) b ON b.listing_id=l.id"""
+PRICE_BUCKETS = 28
+
+
+@dataclass(frozen=True)
+class ListingFilter:
+    """Browse filters. ``seller`` scopes to one profile; ``sellers`` is the
+    browse facet, which its own facet count ignores (as price does)."""
+
+    q: str = ""
+    seller: Optional[str] = None
+    sellers: Tuple[str, ...] = ()
+    min_price: Optional[int] = None
+    max_price: Optional[int] = None
+    bids: str = ""
+    since: Optional[int] = None
+    available: bool = False
+
+    def where(self, now: int, skip: str = "") -> Tuple[str, Dict[str, Any]]:
+        """SQL conditions and parameters for LISTING_FROM, leaving out the
+        ``skip`` facet."""
+        clauses = [
+            "l.state='active'" if self.available else "l.state IN ('active','reserved')"
+        ]
+        params: Dict[str, Any] = {"now": now}
+        if self.q:
+            clauses.append("(lower(c.title) LIKE :like OR lower(p.name) LIKE :like)")
+            params["like"] = f"%{self.q.lower()}%"
+        if self.seller:
+            clauses.append("l.seller=:seller")
+            params["seller"] = self.seller
+        if self.sellers and skip != "sellers":
+            names = [f":s{i}" for i in range(len(self.sellers))]
+            clauses.append(f"l.seller IN ({','.join(names)})")
+            params.update({n[1:]: v for n, v in zip(names, self.sellers)})
+        if self.min_price is not None and skip != "price":
+            clauses.append("l.price>=:min_price")
+            params["min_price"] = self.min_price
+        if self.max_price is not None and skip != "price":
+            clauses.append("l.price<=:max_price")
+            params["max_price"] = self.max_price
+        if self.bids == "some":
+            clauses.append("b.n IS NOT NULL")
+        elif self.bids == "none":
+            clauses.append("b.n IS NULL")
+        if self.since is not None:
+            clauses.append("l.updated>=:since")
+            params["since"] = now - self.since
+        return " AND ".join(clauses), params
 
 
 def market_router(
@@ -2034,10 +2129,28 @@ def market_router(
         sort: ListingSort = "new",
         q: str = Query(default="", max_length=80),
         seller: str = Query(default="", pattern=r"^([0-9a-f]{64})?$"),
+        sellers: str = Query(
+            default="", pattern=r"^([0-9a-f]{64}(,[0-9a-f]{64}){0,19})?$"
+        ),
+        min_price: Optional[int] = Query(default=None, ge=0, le=mp.MAX_PRICE),
+        max_price: Optional[int] = Query(default=None, ge=0, le=mp.MAX_PRICE),
+        bids: Literal["", "some", "none"] = "",
+        since: Optional[int] = Query(default=None, ge=60, le=366 * 86400),
+        available: bool = False,
         limit: int = Query(default=24, ge=1, le=60),
         offset: int = Query(default=0, ge=0, le=10000),
     ):
-        return await market.listings(sort, q.strip(), seller or None, limit, offset)
+        f = ListingFilter(
+            q=q.strip(),
+            seller=seller or None,
+            sellers=tuple(dict.fromkeys(filter(None, sellers.split(",")))),
+            min_price=min_price,
+            max_price=max_price,
+            bids=bids,
+            since=since,
+            available=available,
+        )
+        return await market.listings(sort, f, limit, offset)
 
     @router.get("/api/market/listings/{listing_id}")
     async def listing(listing_id: str):
