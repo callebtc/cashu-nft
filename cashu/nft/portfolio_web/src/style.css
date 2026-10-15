@@ -312,7 +312,21 @@ button.nft-card:hover .nft-media img, .is-preview:hover .nft-media svg { transfo
 /* Nostr login (login.jsx). */
 .or-rule { display: flex; align-items: center; gap: 12px; color: var(--muted); font-size: 12px; font-weight: 750; text-transform: uppercase; letter-spacing: .04em; }
 .or-rule::before, .or-rule::after { content: ''; flex: 1; height: 2px; border-radius: 2px; background: currentColor; opacity: .35; }
-.nostr-missing { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 6px 12px; min-height: 54px; padding: 8px 14px; border-radius: 999px; border: 2px dashed var(--ink); text-align: center; }
+/* Get started (start.jsx): one card per way in. */
+.choices { display: flex; flex-direction: column; gap: 12px; }
+.choice { display: flex; align-items: center; gap: 14px; width: 100%; padding: 14px; text-align: left; border-radius: 18px; border: 2px solid var(--ink); background: var(--paper); box-shadow: var(--shadow); transition: transform .12s var(--ease), box-shadow .12s var(--ease); }
+.choice:hover { transform: translate(-2px, -2px); box-shadow: 6px 6px 0 var(--ink); }
+.choice:active { transform: translate(3px, 3px); box-shadow: 0 0 0 var(--ink); }
+.choice:focus-visible { outline: 3px solid var(--blue); outline-offset: 2px; }
+.choice-icon { display: grid; place-items: center; flex: none; width: 44px; height: 44px; border-radius: 14px; border: 2px solid #111; color: #111; }
+.choice-lime { background: var(--lime); }
+.choice-yellow { background: var(--yellow); }
+.choice-pink { background: var(--pink); }
+.choice-text { display: flex; flex-direction: column; gap: 2px; flex: 1; min-width: 0; }
+.choice-text strong { font-size: 16px; font-weight: 800; }
+.choice-text span { font-size: 13px; font-weight: 550; color: var(--muted); }
+.choice-chevron { flex: none; color: var(--muted); }
+.choice-alt { align-self: center; }
 .badge-nostr { background: #8e44ff; color: #fff; }
 .nostr-import { align-self: flex-start; }
 .tabs-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 26px; }

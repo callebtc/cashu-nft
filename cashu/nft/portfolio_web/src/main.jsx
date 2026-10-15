@@ -24,7 +24,8 @@ import { local } from './storage.ts';
 import { ACTIVE, KEYRING, forget, identityFor, initialIdentity, keyCollections, lockedEntry, saveEntry, storedKeys } from './identity.ts';
 import { deferred, isDeferred } from './signer.ts';
 import { npubDecode, npubEncode, publicKeyIn, shortNpub } from './npub.mjs';
-import { ExtensionButton, useNostrLogin } from './login.jsx';
+import { useNostrLogin } from './login.jsx';
+import { StartDialog } from './start.jsx';
 import { ACCEPT, LABELS, fileFormat, formatOf, imageUrl, withoutExtension } from './formats.mjs';
 import { HOME, MOVED_FROM, MoveOffer, MoveReceive, MoveStranded, movePlan, redirectHome } from './move.jsx';
 import { ActivityItem, ActivityList, ActivityPage, CollectionCard, EditCollectionDialog, ExplorePage, FollowButton, LikeButton, MarketCard,
@@ -636,10 +637,15 @@ function App() {
   };
 
   const closeDialog = () => { if (busy || nostrLogin.busy) return; setDialog(null); setGenerated(''); setInputKey(''); setPassword(''); setBackedUp(false); };
-  const openCreate = () => { setName(''); setGenerated(newPrivateKey()); setBackedUp(false); setDialog('create'); };
-  const openImport = (key = '') => { setName(''); setInputKey(key); setPassword(''); setDialog('import'); };
-  // A stored ncryptsec comes prefilled: only its password is missing.
-  const passwordFirst = dialog === 'import' && /^ncryptsec1/.test(inputKey) && !password;
+  /** Get started (start.jsx): the chooser, or one of its steps directly. */
+  const startStep = (step, key = '') => {
+    setName(''); setInputKey(key); setPassword(''); setBackedUp(false);
+    if (step === 'create') setGenerated(newPrivateKey());
+    setDialog(step);
+  };
+  const openStart = () => startStep('start');
+  const openCreate = () => startStep('create');
+  const openKey = (key = '') => startStep('key', key);
   // Lands a sign-in where the visitor was heading.
   const arrived = (next, data, message) => {
     setIdentity(next); setLocked(null);
@@ -663,7 +669,7 @@ function App() {
   const onboard = async (event) => {
     event.preventDefault();
     const text = inputKey.trim();
-    setBusy(dialog === 'create' ? 'Creating collection' : 'Unlocking');
+    setBusy(dialog === 'create' ? 'Creating collection' : dialog === 'nostr' ? 'Signing in' : 'Unlocking');
     try {
       if (dialog === 'create') { await unlockOwnKey(generated); return; }
       // A plain hex key opens a collection that uses its own key, unless the
@@ -685,7 +691,7 @@ function App() {
     } catch (e) { toast.error(e.message); } finally { setBusy(''); }
   };
   const relogin = () => {
-    if (locked?.entry.kind === 'ncryptsec') openImport(locked.entry.ncryptsec);
+    if (locked?.entry.kind === 'ncryptsec') startStep('nostr', locked.entry.ncryptsec);
     else nostrLogin.withExtension();
   };
   const logout = async () => {
@@ -759,7 +765,7 @@ function App() {
     setDialog(null); navigate(`/p/${target}`);
   };
   const canAdd = owner && !!localWallet && !!config && !busy;
-  const needsIdentity = () => { toast('Start a collection first, then you can like and follow.'); openCreate(); };
+  const needsIdentity = () => { toast('Start a collection first, then you can like and follow.'); openStart(); };
   const applySummary = (target, summary) => {
     if (profile?.pubkey === target) setProfile((p) => p && ({ ...p, likes: summary.likes, followers: summary.followers }));
     setHome((h) => h && ({ ...h, collections: h.collections.map((c) => c.pubkey === target ? { ...c, likes: summary.likes, followers: summary.followers } : c) }));
@@ -814,13 +820,13 @@ function App() {
                   <Menu.Item key={href} className={`menu-item ${route.page === 'profile' ? '' : 'menu-mobile'}`} onClick={() => navigate(href)}><Icon size={15} />{label}{navActive(page) && <Check size={15} className="menu-check" />}</Menu.Item>)}
                 <Menu.Separator className="menu-sep" />
                 <Menu.Item className="menu-item" onClick={openCreate} disabled={!config}><Plus size={15} />Start another collection</Menu.Item>
-                <Menu.Item className="menu-item" onClick={() => openImport()}><KeyRound size={15} />Import a key</Menu.Item>
+                <Menu.Item className="menu-item" onClick={() => openKey()}><KeyRound size={15} />Import a key</Menu.Item>
                 <Menu.Item className="menu-item" onClick={() => setDialog('open')}><Link2 size={15} />Open by public key</Menu.Item>
                 {identity.nostr && <Menu.Item className="menu-item" onClick={logout} disabled={!!busy}><LogOut size={15} />Log out</Menu.Item>}
                 <ThemeItems theme={theme} setTheme={setTheme} />
               </Menu.Popup></Menu.Positioner></Menu.Portal>
             </Menu.Root>
-            : <Button variant="primary" size="sm" className="topbar-cta" onClick={openCreate} disabled={!config}>Get started</Button>}
+            : <Button variant="primary" size="sm" className="topbar-cta" onClick={openStart} disabled={!config}>Get started</Button>}
         </div>
       </div>
     </header>
@@ -837,19 +843,19 @@ function App() {
       : route.page === 'explore' ? <ExplorePage tab={route.tab} navigate={navigate} relations={relations} onLike={likeCollection} openCard={openCard} />
 
       : route.page === 'claim' ? <ClaimPage linkId={route.id} config={config} identity={identity} wallet={localWallet} walletState={walletState} navigate={navigate}
-        onCreate={openCreate} onImport={() => openImport()} onReceived={() => toast.success('Claimed. The NFT is in your collection.')} />
+        onCreate={openCreate} onImport={() => openKey()} onReceived={() => toast.success('Claimed. The NFT is in your collection.')} />
 
       : route.page === 'activity' ? <ActivityPage identity={identity} navigate={navigate} openCard={openCard} />
 
       : route.page === 'market' ? <MarketPage navigate={navigate} />
 
-      : route.page === 'listing' ? <ListingPage id={route.id} navigate={navigate} identity={identity} market={market} onStart={openCreate} startOffer={route.offer} />
+      : route.page === 'listing' ? <ListingPage id={route.id} navigate={navigate} identity={identity} market={market} onStart={openStart} startOffer={route.offer} />
 
-      : route.page === 'wallet' ? (identity ? <WalletPage market={market} navigate={navigate} then={route.then} /> : <SignInFirst onStart={openCreate} />)
+      : route.page === 'wallet' ? (identity ? <WalletPage market={market} navigate={navigate} then={route.then} /> : <SignInFirst onStart={openStart} />)
 
-      : route.page === 'offers' ? (identity ? <OffersPage navigate={navigate} market={market} nftWallet={localWallet} cards={myCards} initialTab={route.tab} focus={route.offer} /> : <SignInFirst onStart={openCreate} />)
+      : route.page === 'offers' ? (identity ? <OffersPage navigate={navigate} market={market} nftWallet={localWallet} cards={myCards} initialTab={route.tab} focus={route.offer} /> : <SignInFirst onStart={openStart} />)
 
-      : route.page === 'how' ? <HowItWorks view={route.view} onStart={() => identity ? navigate(`/p/${identity.pubkey}`) : openCreate()}
+      : route.page === 'how' ? <HowItWorks view={route.view} onStart={() => identity ? navigate(`/p/${identity.pubkey}`) : openStart()}
         onView={(view) => { window.history.replaceState({}, '', view === 'cryptography' ? '/how-it-works?view=cryptography' : '/how-it-works'); setRoute(readRoute()); }} />
 
       : route.page === 'home' ? <main className="page home">
@@ -860,7 +866,7 @@ function App() {
             <p className="lead">Turn any picture into a collectible. Its proof of ownership lives inside the file, so sending the file sends the NFT.</p>
             <div className="hero-actions">
               {identity ? <Button variant="primary" size="lg" icon={<ArrowRight size={16} />} onClick={() => navigate(`/p/${identity.pubkey}`)}>Open my collection</Button>
-                : <Button variant="primary" size="lg" icon={<Plus size={16} />} onClick={openCreate} disabled={!config}>Start a collection</Button>}
+                : <Button variant="primary" size="lg" icon={<Plus size={16} />} onClick={openStart} disabled={!config}>Start a collection</Button>}
               <Button variant="secondary" size="lg" onClick={() => navigate('/how-it-works')}>How it works</Button>
             </div>
           </motion.div>
@@ -928,7 +934,7 @@ function App() {
         <section className="home-cta">
           <h2>Your first NFT is one picture away.</h2>
           <div className="hero-actions">
-            <Button variant="primary" size="lg" onClick={() => identity ? navigate(`/p/${identity.pubkey}`) : openCreate()} disabled={!config}>{identity ? 'Open my collection' : 'Start a collection'}</Button>
+            <Button variant="primary" size="lg" onClick={() => identity ? navigate(`/p/${identity.pubkey}`) : openStart()} disabled={!config}>{identity ? 'Open my collection' : 'Start a collection'}</Button>
           </div>
         </section>
       </main>
@@ -968,7 +974,7 @@ function App() {
                   <Menu.Item className="menu-item" onClick={recoverWallet} disabled={!!busy || !config}><RefreshCw size={15} />Sync wallet from backup</Menu.Item>
                 </Menu.Popup></Menu.Positioner></Menu.Portal>
               </Menu.Root>}
-              {!identity && <Button variant="secondary" icon={<KeyRound size={15} />} onClick={() => openImport()}>Unlock</Button>}
+              {!identity && <Button variant="secondary" icon={<KeyRound size={15} />} onClick={() => openKey()}>Unlock</Button>}
             </div>
           </div>
           <div className="profile-stats">
@@ -980,7 +986,7 @@ function App() {
           </div>
         </section>
 
-        {profileError && <Notice action={!profile && identity?.pubkey === pubkey && identity.secret ? <Button size="sm" variant="secondary" onClick={() => openImport(identity.secret)}>Create it</Button> : null}>{profileError}</Notice>}
+        {profileError && <Notice action={!profile && identity?.pubkey === pubkey && identity.secret ? <Button size="sm" variant="secondary" onClick={() => openKey(identity.secret)}>Create it</Button> : null}>{profileError}</Notice>}
         {owner && <StorageNotice />}
         {owner && walletError && <Notice tone="bad" action={<Button size="sm" variant="secondary" onClick={recoverWallet} disabled={!!busy}>Sync wallet</Button>}>{walletError}</Notice>}
 
@@ -1023,37 +1029,11 @@ function App() {
       </div>
     </footer>
 
-    <Modal open={dialog === 'create' || dialog === 'import'} close={closeDialog}
-      title={dialog === 'create' ? 'Create a collection' : 'Unlock a collection'}
-      description={dialog === 'create' ? 'Your collection is controlled by a private key generated in this browser. Save it now: there is no password reset.' : 'Paste the private key of an existing collection. It stays in this browser.' + (!HOME.startsWith('https://') || MOVED_FROM.includes(HOME) ? '' : ` Used ${MOVED_FROM.map((o) => new URL(o).host).join(' or ')} before? Open it in this browser once and your collection moves here.`)}>
-      <form onSubmit={onboard} className="stack">
-        {dialog === 'create' ? <>
-          <label className="field"><span>Collection name</span><input maxLength={40} placeholder="e.g. Field recordings" value={name} onChange={(e) => setName(e.target.value)} autoFocus /></label>
-          <div className="keybox">
-            <div className="keybox-head"><span><KeyRound size={14} /> Private key</span><span className="muted">Never share this</span></div>
-            <code className="mono">{generated}</code>
-            <div className="row">
-              <CopyChip value={generated} display="Copy" message="Private key copied" />
-              <Button type="button" variant="ghost" size="sm" icon={<Download size={14} />} onClick={() => download(new Blob([generated + '\n'], { type: 'text/plain' }), 'nonfungible-cash-private-key.txt')}>Download</Button>
-            </div>
-          </div>
-          <label className="ack">
-            <input type="checkbox" checked={backedUp} onChange={(e) => setBackedUp(e.target.checked)} />
-            <span className="ack-box"><DrawnCheck on={backedUp} size={14} /></span>
-            <span>I saved my private key. Without it this collection can't be recovered.</span>
-          </label>
-        </> : <>
-          <label className="field"><span>Private key</span><input type="password" autoComplete="off" placeholder="nsec, ncryptsec or 64 hex characters" spellCheck={false} value={inputKey} onChange={(e) => setInputKey(e.target.value)} required autoFocus={!passwordFirst} /></label>
-          {/^\s*(?:nostr:)?ncryptsec1/i.test(inputKey) && <label className="field"><span>Password</span><input type="password" autoComplete="current-password" value={password} onChange={(e) => setPassword(e.target.value)} required autoFocus={passwordFirst} /></label>}
-          {/^\s*(?:nostr:)?nsec1/i.test(inputKey) && <span className="hint">Prefer a signing extension: your nsec never touches this site.</span>}
-        </>}
-        <Button variant="primary" size="lg" className="full" type="submit" disabled={!!busy || !!nostrLogin.busy || (dialog === 'create' && !backedUp)} icon={busy ? <Spinner /> : null}>
-          {busy || (dialog === 'create' ? 'Create collection' : 'Unlock')}
-        </Button>
-        <div className="or-rule" role="separator"><span>or</span></div>
-        <ExtensionButton onClick={nostrLogin.withExtension} busy={nostrLogin.busy} onPaste={dialog === 'create' ? () => openImport() : null} />
-      </form>
-    </Modal>
+    <StartDialog step={dialog} setStep={(step) => startStep(step)} close={closeDialog} busy={busy} onSubmit={onboard}
+      nostr={{ busy: nostrLogin.busy, withExtension: nostrLogin.withExtension }}
+      create={{ generated, name, setName, backedUp, setBackedUp }}
+      pasted={{ value: inputKey, setValue: setInputKey, password, setPassword }}
+      moved={!HOME.startsWith('https://') || MOVED_FROM.includes(HOME) ? '' : ` Used ${MOVED_FROM.map((o) => new URL(o).host).join(' or ')} before? Open it in this browser once and your collection moves here.`} />
 
     <Modal open={dialog === 'open'} close={closeDialog} title="Find a profile" description="Paste a collector's public key or profile link.">
       <form onSubmit={openProfile} className="stack">
