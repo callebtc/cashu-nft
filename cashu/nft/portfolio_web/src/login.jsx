@@ -71,15 +71,16 @@ export function useNostrLogin(onIdentity, onStep) {
   return { busy, withExtension, withKey, dialogs };
 }
 
-/** "Continue with Nostr extension", or why it isn't available. */
-export function ExtensionButton({ onClick, busy, onPaste }) {
+/** Whether this browser has a Nostr signing extension: null while looking. */
+export function useExtensionFound() {
   const [found, setFound] = useState(null);
   useEffect(() => { let live = true; waitForExtension().then((ext) => { if (live) setFound(!!ext); }); return () => { live = false; }; }, []);
-  if (found === false) return <div className="nostr-missing">
-    <span className="hint">No Nostr extension found.</span>
-    {onPaste && <button type="button" className="link" onClick={onPaste}>Paste a Nostr key instead</button>}
-  </div>;
-  return <Button type="button" variant="secondary" size="lg" className="full" icon={busy ? <Spinner /> : <Plug size={16} />} onClick={onClick} disabled={!!busy || found === null}>
+  return found;
+}
+
+/** "Continue with Nostr extension", once `useExtensionFound` found one. */
+export function ExtensionButton({ onClick, busy, found }) {
+  return <Button type="button" variant="secondary" size="lg" className="full" icon={busy ? <Spinner /> : <Plug size={16} />} onClick={onClick} disabled={!!busy || !found}>
     {busy || 'Continue with Nostr extension'}
   </Button>;
 }
