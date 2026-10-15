@@ -1310,7 +1310,12 @@ def create_portfolio_app(
         if row is None:
             raise HTTPException(404, "Image not found.")
         data = bytes(row["jpg"])
-        return Response(data, media_type=image_format(data).mime)
+        # h is the asset hash of these bytes, so the URL never changes content.
+        return Response(
+            data,
+            media_type=image_format(data).mime,
+            headers={"Cache-Control": "public, max-age=31536000, immutable"},
+        )
 
     # Social preview images. Renders are cached by content version, so a
     # crawler can't force fresh renders by varying ?v=.

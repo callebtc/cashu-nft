@@ -513,6 +513,7 @@ def test_public_endpoints_never_expose_credentials(client):
     image = client.get(f"/api/images/{card['h']}.jpg")
     assert image.status_code == 200
     assert image.headers["content-type"] == "image/jpeg"
+    assert image.headers["cache-control"] == "public, max-age=31536000, immutable"
     assert TOKEN_PREFIX.encode() not in image.content
     assert extract_token(image.content) is None
     assert bytes.fromhex(cred_hex) not in image.content
