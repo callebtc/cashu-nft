@@ -624,6 +624,12 @@ def create_portfolio_app(
         # Routes serving versioned URLs (avatars, previews) set their own.
         if request.url.path.startswith(("/api/", "/v1/")):
             response.headers.setdefault("Cache-Control", "no-store")
+        # Other sites may show whether a claim link is still open. The request
+        # carries only the link ID; the key stays in the URL fragment.
+        if request.method == "GET" and re.fullmatch(
+            r"/api/links/[^/]+", request.url.path
+        ):
+            response.headers["Access-Control-Allow-Origin"] = "*"
         return response
 
     @app.exception_handler(ValueError)

@@ -151,9 +151,11 @@ ciphertext is bound to the link ID, the asset hash and the protection flag.
 `GET /api/links/<id>` returns public metadata and, while the link is open, the
 ciphertext. Status is derived from the mint: `open` while the linked
 credential is unspent, `claimed` once a new card holds the asset, and `void`
-after the sender cancels. The receiving browser decrypts, checks the
-credential against the public JPG and redeems it through the normal receive
-flow. A forgotten password cannot be recovered; the sender can cancel.
+after the sender cancels. Other sites may read this endpoint from the browser
+(`Access-Control-Allow-Origin: *`, without credentials), for example to show
+whether a link they display is still open. The receiving browser decrypts,
+checks the credential against the public JPG and redeems it through the normal
+receive flow. A forgotten password cannot be recovered; the sender can cancel.
 
 ## Picture handling
 
