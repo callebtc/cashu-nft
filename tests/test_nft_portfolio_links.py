@@ -288,7 +288,11 @@ def test_link_status_readable_cross_origin(client):
     assert resp.status_code == 200, resp.text
     assert "access-control-allow-origin" not in resp.headers
 
-    for link_id, status in ((body["id"], 200), (secrets.token_hex(16), 404)):
+    for link_id, status in (
+        (body["id"], 200),
+        (secrets.token_hex(16), 404),
+        ("not-a-link", 404),
+    ):
         resp = client.get(f"/api/links/{link_id}", headers=origin)
         assert resp.status_code == status
         assert resp.headers["access-control-allow-origin"] == "*"

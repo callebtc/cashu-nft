@@ -625,10 +625,10 @@ def create_portfolio_app(
         if request.url.path.startswith(("/api/", "/v1/")):
             response.headers.setdefault("Cache-Control", "no-store")
         # Other sites may show whether a claim link is still open. The request
-        # carries only the link ID; the key stays in the URL fragment.
-        if request.method == "GET" and re.fullmatch(
-            r"/api/links/[^/]+", request.url.path
-        ):
+        # carries only the link ID; the key stays in the URL fragment. Matching
+        # the route, not the path, keeps future /api/links/... routes private.
+        route = getattr(request.scope.get("route"), "path", None)
+        if request.method == "GET" and route == "/api/links/{link_id}":
             response.headers["Access-Control-Allow-Origin"] = "*"
         return response
 
