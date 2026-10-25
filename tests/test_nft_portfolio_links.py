@@ -273,6 +273,32 @@ def test_get_unknown_and_malformed_link(client):
         assert client.get(f"/api/links/{bad}").status_code == 404
 
 
+def test_link_status_readable_cross_origin(client):
+    """Other sites may read a link's public status, but nothing else."""
+    origin = {"Origin": "https://example.com"}
+    alice = person(client, "Alice")
+    card = ready_card(alice)
+    body = link_body(card)
+    raw = json.dumps(body).encode()
+    path = f"{alice.base}/links"
+    challenge = alice.challenge(path, raw)
+    resp = client.post(
+        path, content=raw, headers={**alice.headers(challenge), **origin}
+    )
+    assert resp.status_code == 200, resp.text
+    assert "access-control-allow-origin" not in resp.headers
+
+    for link_id, status in (
+        (body["id"], 200),
+        (secrets.token_hex(16), 404),
+        ("not-a-link", 404),
+    ):
+        resp = client.get(f"/api/links/{link_id}", headers=origin)
+        assert resp.status_code == status
+        assert resp.headers["access-control-allow-origin"] == "*"
+        assert "access-control-allow-credentials" not in resp.headers
+
+
 # --- lifecycle --------------------------------------------------------------
 
 
